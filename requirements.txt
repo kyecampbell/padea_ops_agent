@@ -1,0 +1,16 @@
+# requirements.txt
+#
+# Python dependencies for the Padea Operations Agent.
+# Pin versions once the stack is finalised.
+#
+# Likely candidates (uncomment / adjust as needed):
+#
+# anthropic          # Claude API client
+# python-dotenv      # Load .env into os.environ
+# sqlalchemy         # Database ORM / query layer
+# psycopg2-binary    # PostgreSQL adapter (if using Postgres)
+# pydantic           # Data validation and settings management
+# httpx              # Async HTTP client for external API calls
+# jinja2             # Templating for email drafts and HTML logs
+# pytest             # Test runner
+# pytest-asyncio     # Async test support

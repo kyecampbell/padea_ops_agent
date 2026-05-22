@@ -1,0 +1,6 @@
+# logs/html/
+#
+# Human-readable HTML renderings of agent runs, generated from logs/runs/.
+# Useful for sharing decision traces with non-technical stakeholders.
+#
+# Files here are gitignored — generated output, not source.
