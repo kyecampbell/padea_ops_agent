@@ -1,0 +1,398 @@
+// ============================================================
+// Padea Operations Agent — Stage 0 baseline (kitchen sink)
+// ============================================================
+// 27 tables · 40 foreign-key relationships · 1 self-reference
+// Compiled 24 May 2026 from schema_complete.md.
+//
+// HOW TO USE: paste this entire file into the left pane at
+// https://dbdiagram.io/d. The diagram appears on the right.
+// Click any table to highlight its relationships.
+// File → Export → PNG when you need a snapshot for the memo.
+//
+// PRUNING WORKFLOW (Musk algorithm):
+//   - Save copies as you go: padea_stage_1_questioned.dbml,
+//     padea_stage_2_deleted.dbml, padea_stage_3_simplified.dbml.
+//   - Comment out doomed tables/columns with // before deleting.
+//     Lets the reader see what was cut, not just what remains.
+//   - Tag candidate cuts in column notes with [Q?] (question)
+//     or [DEL?] (delete candidate) so they show in the diagram.
+
+Project padea_baseline {
+  database_type: 'SQLite'
+  Note: 'Stage 0 — before applying question → delete → simplify.'
+}
+
+// ─── IDENTITY AND STRUCTURE ────────────────────────────────
+
+Table schools {
+  school_id int [pk, increment]
+  name text
+  short_code text [note: 'e.g. ISHS, MBBC']
+}
+
+Table sessions {
+  session_id int [pk, increment]
+  school_id int [ref: > schools.school_id]
+  date date
+  day_of_week text
+  session_start timestamp
+  session_end timestamp
+  dinner_start timestamp
+  dinner_end timestamp
+  building text
+  room text
+  expected_manager_id int [ref: > tutors.tutor_id, null, note: 'pre-session manager']
+  actual_manager_id int [ref: > tutors.tutor_id, null, note: 'post-session truth']
+}
+
+Table students {
+  student_id int [pk, increment]
+  full_name text
+  parent_contact_info text [note: 'parent table deferred']
+}
+
+Table tutors {
+  tutor_id int [pk, increment]
+  name text
+  mobile text [null]
+}
+
+Table enrolments {
+  enrolment_id int [pk, increment]
+  student_id int [ref: > students.student_id]
+  session_id int [ref: > sessions.session_id]
+  start_date date
+  end_date date [null, note: 'null = currently enrolled']
+  year_level text
+  opted_out boolean
+}
+
+// ─── DIETARY MODELLING ─────────────────────────────────────
+// [Q?] Three near-identical junction tables — merge into one
+//      polymorphic tag_assignments table with an entity_type col?
+
+Table dietary_tags {
+  tag_id int [pk, increment]
+  tag_name text [note: 'gluten_free, halal, no_seafood, etc.']
+}
+
+Table student_dietary_tags {
+  student_id int [ref: > students.student_id]
+  tag_id int [ref: > dietary_tags.tag_id]
+  indexes {
+    (student_id, tag_id) [pk]
+  }
+}
+
+Table tutor_dietary_tags {
+  tutor_id int [ref: > tutors.tutor_id]
+  tag_id int [ref: > dietary_tags.tag_id]
+  indexes {
+    (tutor_id, tag_id) [pk]
+  }
+}
+
+// ─── CATERING SUPPLY ───────────────────────────────────────
+
+Table caterers {
+  caterer_id int [pk, increment]
+  name text
+  delivery_fee money
+  gst_treatment text
+}
+
+Table contacts {
+  contact_id int [pk, increment]
+  caterer_id int [ref: > caterers.caterer_id]
+  name text
+  email text
+  mobile text [null]
+  is_order_taker boolean
+  is_chef boolean
+  is_primary_contact boolean
+  cc_on_orders boolean
+}
+
+Table caterer_school_capabilities {
+  capability_id int [pk, increment]
+  caterer_id int [ref: > caterers.caterer_id]
+  school_id int [ref: > schools.school_id]
+  day_of_week text
+  effective_from date
+  effective_to date [null]
+  preference_rank int
+}
+
+Table menu_items {
+  menu_item_id int [pk, increment]
+  caterer_id int [ref: > caterers.caterer_id]
+  name text
+  base_price money
+  gst_treatment text
+  vegetarian_swap_available boolean
+  effective_from date
+  effective_to date [null]
+}
+
+Table menu_item_dietary_tags {
+  menu_item_id int [ref: > menu_items.menu_item_id]
+  tag_id int [ref: > dietary_tags.tag_id]
+  indexes {
+    (menu_item_id, tag_id) [pk]
+  }
+}
+
+Table caterer_moq_rules {
+  rule_id int [pk, increment]
+  caterer_id int [ref: > caterers.caterer_id]
+  menu_variety_count int
+  min_weekly_meals int
+}
+
+// ─── SESSION EXECUTION ─────────────────────────────────────
+
+Table session_tutor_assignments {
+  assignment_id int [pk, increment]
+  session_id int [ref: > sessions.session_id]
+  tutor_id int [ref: > tutors.tutor_id]
+}
+
+// ─── ORDERS ────────────────────────────────────────────────
+
+Table orders {
+  order_id int [pk, increment]
+  caterer_id int [ref: > caterers.caterer_id]
+  session_id int [ref: > sessions.session_id]
+  status text [note: 'draft/sent/confirmed/delivered/cancelled']
+  generated_at timestamp
+  sent_at timestamp [null]
+  confirmed_at timestamp [null]
+  delivered_at timestamp [null]
+  total_estimated_cost money
+  actual_paid_cost money [null, note: 'Layer 3 fabricated demo data']
+  notes text
+}
+
+Table order_lines {
+  line_id int [pk, increment]
+  order_id int [ref: > orders.order_id]
+  session_id int [ref: > sessions.session_id, note: '[DEL?] denormalised — already reachable via orders.session_id']
+  menu_item_id int [ref: > menu_items.menu_item_id]
+  student_id int [ref: > students.student_id, null, note: 'null = buffer/contingency']
+  line_purpose text [note: 'student_meal/tutor_meal/contingency']
+  is_vegetarian_variant boolean
+  unit_price_at_order_time money
+  status text
+  notes text
+}
+
+// ─── FEEDBACK ──────────────────────────────────────────────
+
+Table feedback {
+  feedback_id int [pk, increment]
+  feedback_type text [note: 'manager_session/tutor_session/term_survey_parent/term_survey_student']
+  session_id int [ref: > sessions.session_id, null, note: 'null for term surveys']
+  submitted_at timestamp
+  submitted_by_role text
+  submitter_id int [null, note: '[Q?] polymorphic — no real FK; tutor_id OR pseudonymous ID']
+  overall_rating int [null]
+  received_meal boolean [null]
+  meal_not_received_reason text [null]
+  comments text [null]
+}
+
+Table feedback_extracted_signals {
+  signal_id int [pk, increment]
+  feedback_id int [ref: > feedback.feedback_id]
+  signal_type text
+  sentiment text
+  referenced_menu_item_id int [ref: > menu_items.menu_item_id, null]
+  raw_excerpt text
+  extracted_at timestamp
+  extracted_by text [note: 'LLM identifier for reproducibility']
+}
+
+Table walkup_events {
+  walkup_id int [pk, increment]
+  feedback_id int [ref: > feedback.feedback_id]
+  session_id int [ref: > sessions.session_id]
+  walkup_student_name text
+  resolved_student_id int [ref: > students.student_id, null]
+  resolution_status text
+  escalation_id int [ref: > escalations.escalation_id, null]
+  created_at timestamp
+}
+
+Table term_surveys {
+  term_survey_id int [pk, increment]
+  feedback_id int [ref: > feedback.feedback_id]
+  term_label text
+  food_taste_rating int
+  food_quantity_rating int
+  food_variety_rating int
+  food_dietary_handling_rating int
+  overall_term_rating int
+}
+
+// ─── OPERATIONAL EVENTS ────────────────────────────────────
+
+Table absences {
+  absence_id int [pk, increment]
+  student_id int [ref: > students.student_id]
+  session_id int [ref: > sessions.session_id]
+  received_at timestamp
+  reason text [null]
+  walked_back_at timestamp [null, note: 'null = absence still stands']
+  source_email_id int [ref: > incoming_emails.email_id, null]
+  created_at timestamp
+  indexes {
+    (student_id, session_id) [unique]
+  }
+}
+
+Table exclusions {
+  exclusion_id int [pk, increment]
+  session_id int [ref: > sessions.session_id]
+  scope text [note: 'whole_session/year_level']
+  scope_value text [null]
+  reason text [null]
+  received_at timestamp
+  source_email_id int [ref: > incoming_emails.email_id, null]
+  created_at timestamp
+  indexes {
+    (session_id, scope, scope_value) [unique]
+  }
+}
+
+// ─── AGENT INFRASTRUCTURE ──────────────────────────────────
+
+Table incoming_emails {
+  email_id int [pk, increment]
+  message_id text [unique]
+  received_at timestamp
+  fetched_at timestamp
+  from_address text
+  from_name text
+  to_address text
+  subject text
+  body_plain text
+  body_html text
+  raw_headers text
+  attachments_info text [note: 'JSON: metadata only in v1']
+  classification text [null]
+  classified_at timestamp [null]
+  processing_status text
+  processed_at timestamp [null]
+  created_at timestamp
+}
+
+Table agent_runs {
+  run_id int [pk, increment]
+  trigger_type text
+  trigger_detail text
+  trigger_context text [note: 'JSON']
+  intended_purpose text
+  started_at timestamp
+  finished_at timestamp [null]
+  status text
+  agent_version text
+  model_identifiers text [note: 'JSON']
+  summary text [null]
+  error_summary text [null]
+  created_at timestamp
+}
+
+Table decision_logs {
+  decision_id int [pk, increment]
+  run_id int [ref: > agent_runs.run_id]
+  decision_type text
+  parent_decision_id int [ref: > decision_logs.decision_id, null, note: 'self-ref for nested reasoning']
+  sequence_in_run int
+  started_at timestamp
+  finished_at timestamp [null]
+  title text
+  summary text [null]
+  reasoning text [null]
+  alternatives_considered text [note: 'JSON']
+  chosen_option text [null]
+  rule_applied text [null]
+  referenced_entities text [note: '[Q?] JSON polymorphic refs across many tables']
+  tool_name text
+  tool_input text
+  tool_output_summary text
+  status text
+  flags text [note: 'JSON']
+  created_at timestamp
+}
+
+Table escalations {
+  escalation_id int [pk, increment]
+  created_run_id int [ref: > agent_runs.run_id]
+  escalation_type text
+  severity text
+  resolution_mode text
+  match_key text [null]
+  title text
+  body text
+  referenced_entities text [note: '[Q?] JSON polymorphic refs across many tables']
+  triggering_decision_ids text [note: '[Q?] JSON soft-ref to decision_logs']
+  state text
+  created_at timestamp
+  last_observed_at timestamp
+  resolved_at timestamp [null]
+  resolved_by text [note: 'text in v1; no user table yet']
+  resolution_note text [null]
+}
+
+// ─── TABLE GROUPS (cluster the layout) ─────────────────────
+
+TableGroup identity_and_structure {
+  schools
+  sessions
+  students
+  tutors
+  enrolments
+}
+
+TableGroup dietary {
+  dietary_tags
+  student_dietary_tags
+  tutor_dietary_tags
+}
+
+TableGroup catering_supply {
+  caterers
+  contacts
+  caterer_school_capabilities
+  menu_items
+  menu_item_dietary_tags
+  caterer_moq_rules
+}
+
+TableGroup session_execution {
+  session_tutor_assignments
+}
+
+TableGroup orders {
+  orders
+  order_lines
+}
+
+TableGroup feedback_cluster {
+  feedback
+  feedback_extracted_signals
+  walkup_events
+  term_surveys
+}
+
+TableGroup operational_events {
+  absences
+  exclusions
+}
+
+TableGroup agent_infra {
+  incoming_emails
+  agent_runs
+  decision_logs
+  escalations
+}
