@@ -1,4 +1,4 @@
-# Padea Operations Agent
+we # Padea Operations Agent
 
 An AI-powered operations agent for Padea, built to automate and streamline
 catering operations workflows.
