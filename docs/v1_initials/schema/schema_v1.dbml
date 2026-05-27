@@ -1,0 +1,652 @@
+// ============================================================================
+// Padea Operations Agent — V1 Schema
+// ============================================================================
+// Compiled: 26 May 2026
+// Companion documents: data_observations.md, assumptions.md,
+//                      requirements_v1.md, decision_register.md, v1_summary.md
+//
+// Conventions:
+//   - Primary keys are integer auto-increment.
+//   - Timestamps stored as TIMESTAMP type.
+//   - Money columns stored as integer cents.
+//   - Where a field can be computed from other stored fields, it is not stored.
+//   - History tables capture mutations on key entities; current state lives
+//     in the primary tables and prior states live in their history table.
+// ============================================================================
+
+
+// ============================================================================
+// SECTION 1: Identity and structure
+// ============================================================================
+
+Table schools {
+  school_id int [pk, increment]
+  name text [not null]
+  short_code text
+  region text
+  created_at timestamp
+}
+
+Table students {
+  student_id int [pk, increment]
+  full_name text [not null]
+  date_of_birth date
+  notes text
+  created_at timestamp
+}
+
+Table parents {
+  parent_id int [pk, increment]
+  name text
+  email text
+  mobile text
+  created_at timestamp
+  Note: 'First-class entity so per-parent statistics (notification reliability, walkup patterns) survive contact-detail changes via stable parent_id reference.'
+}
+
+Table enrolments {
+  enrolment_id int [pk, increment]
+  student_id int [ref: > students.student_id, not null]
+  school_id int [ref: > schools.school_id, not null]
+  parent_id int [ref: > parents.parent_id]
+  start_date date [not null]
+  end_date date
+  year_level int
+  opted_out boolean [default: false]
+  created_at timestamp
+  Note: 'One row per student per school per period. Year level and opt-out live on the enrolment because they are contextual to the enrolment, not properties of the student.'
+}
+
+Table enrolment_sessions {
+  enrolment_session_id int [pk, increment]
+  enrolment_id int [ref: > enrolments.enrolment_id]
+  session_id int [ref: > sessions.session_id]
+  effective_from date
+  effective_to date
+  Note: 'Links an enrolment to the specific sessions the student attends. A student enrolled at a school with multiple sessions per week (e.g. Monday and Thursday) has one row per session attended.'
+}
+
+Table enrolment_history {
+  history_id int [pk, increment]
+  enrolment_id int [ref: > enrolments.enrolment_id, not null]
+  changed_at timestamp [not null]
+  changed_by_actor text
+  changed_by_id int
+  cause_run_id int
+  cause_decision_id int
+  prior_values text
+  new_values text
+  Note: 'Immutable record of changes to enrolment rows. Each mutation produces one row capturing prior and new values plus the actor and cause.'
+}
+
+Table dietary_tags {
+  tag_id int [pk, increment]
+  tag_name text [not null, unique]
+  description text
+  is_safety_critical boolean [default: false]
+  Note: 'Controlled vocabulary for dietary requirements. is_safety_critical distinguishes allergy-level tags from preference-level tags.'
+}
+
+Table enrolment_dietary_tags {
+  enrolment_id int [ref: > enrolments.enrolment_id]
+  tag_id int [ref: > dietary_tags.tag_id]
+  severity text
+  recorded_at timestamp
+  indexes {
+    (enrolment_id, tag_id) [pk]
+  }
+  Note: 'Dietary tags attach to the enrolment so a student can have different disclosures at different schools. Severity allows escalation from preference through allergy to anaphylaxis.'
+}
+
+Table tutors {
+  tutor_id int [pk, increment]
+  name text [not null]
+  email text
+  mobile text
+  created_at timestamp
+}
+
+
+// ============================================================================
+// SECTION 2: Sessions and assignments
+// ============================================================================
+
+Table sessions {
+  session_id int [pk, increment]
+  school_id int [ref: > schools.school_id, not null]
+  date date [not null]
+  day_of_week text
+  session_start timestamp
+  session_end timestamp
+  dinner_start timestamp
+  dinner_end timestamp
+  building text
+  room text
+  created_at timestamp
+}
+
+Table session_tutor_assignments {
+  assignment_id int [pk, increment]
+  session_id int [ref: > sessions.session_id]
+  tutor_id int [ref: > tutors.tutor_id]
+  role text
+  status text
+  assigned_at timestamp
+  Note: 'Single source of truth for who is at a session and in what role. role: manager or tutor. status: expected or actual. The manager for a session is the assignment row where role=manager. Cover events are detectable as a status=actual row pointing to a different tutor than the status=expected row for the same role.'
+}
+
+
+// ============================================================================
+// SECTION 3: Caterers, capability, contacts
+// ============================================================================
+
+Table caterers {
+  caterer_id int [pk, increment]
+  name text [not null]
+  price_per_item_cents int
+  price_includes_gst boolean [default: false]
+  delivery_fee_structure text
+  delivery_fee_cents int
+  gst_rate_percent int [default: 10]
+  lead_time_hours int
+  created_at timestamp
+  Note: 'Pricing decomposed into explicit fields. delivery_fee_structure: none, per_trip, per_school_per_trip, or per_item. lead_time_hours drives the expected-confirmation deadline on each order.'
+}
+
+Table caterer_history {
+  history_id int [pk, increment]
+  caterer_id int [ref: > caterers.caterer_id]
+  changed_at timestamp
+  changed_by_actor text
+  changed_by_id int
+  cause_run_id int
+  cause_decision_id int
+  prior_values text
+  new_values text
+}
+
+Table contacts {
+  contact_id int [pk, increment]
+  caterer_id int [ref: > caterers.caterer_id]
+  name text
+  email text
+  mobile text
+  is_order_taker boolean [default: false]
+  is_chef boolean [default: false]
+  is_primary_contact boolean [default: false]
+  cc_on_orders boolean [default: false]
+  created_at timestamp
+  Note: 'Four orthogonal role booleans. Any combination is valid.'
+}
+
+Table caterer_school_capabilities {
+  capability_id int [pk, increment]
+  caterer_id int [ref: > caterers.caterer_id]
+  school_id int [ref: > schools.school_id]
+  day_of_week text
+  status text
+  effective_from date
+  effective_to date
+  preference_rank int
+  source text
+  created_at timestamp
+  Note: 'status: currently_serving, able_to_serve, previously_served, confirmed_unable. Effective-dated so historical capability state is preserved through rotations.'
+}
+
+
+// ============================================================================
+// SECTION 4: Menus
+// ============================================================================
+
+Table menu_items {
+  menu_item_id int [pk, increment]
+  caterer_id int [ref: > caterers.caterer_id]
+  name text [not null]
+  base_price_cents int
+  gst_treatment text
+  vegetarian_swap_available boolean [default: false]
+  dietary_resolution_status text [default: 'pending']
+  effective_from date
+  effective_to date
+  created_at timestamp
+  Note: 'dietary_resolution_status: pending, resolved, or escalated. Items whose dietary attributes cannot be inferred from name and legend (e.g. "Spaghetti meatballs") remain pending until a human resolves them. Only resolved items are available for matching.'
+}
+
+Table menu_item_history {
+  history_id int [pk, increment]
+  menu_item_id int [ref: > menu_items.menu_item_id]
+  changed_at timestamp
+  changed_by_actor text
+  changed_by_id int
+  cause_run_id int
+  cause_decision_id int
+  prior_values text
+  new_values text
+}
+
+Table menu_item_contains {
+  menu_item_id int [ref: > menu_items.menu_item_id]
+  tag_id int [ref: > dietary_tags.tag_id]
+  indexes {
+    (menu_item_id, tag_id) [pk]
+  }
+  Note: 'Positive ingredient attributes of the item (contains_pork, contains_beef, contains_nuts).'
+}
+
+Table menu_item_suitable_for {
+  menu_item_id int [ref: > menu_items.menu_item_id]
+  tag_id int [ref: > dietary_tags.tag_id]
+  indexes {
+    (menu_item_id, tag_id) [pk]
+  }
+  Note: 'Positive suitability attributes (is_vegetarian, is_halal, is_gluten_free). Resolved at ingest from menu_item_contains and the legend rules.'
+}
+
+Table caterer_moq_rules {
+  rule_id int [pk, increment]
+  caterer_id int [ref: > caterers.caterer_id]
+  menu_variety_count int
+  min_weekly_meals int
+  Note: 'MOQ scales with variety: a higher variety_count requires a higher weekly minimum.'
+}
+
+
+// ============================================================================
+// SECTION 5: Preferences and term-start flow
+// ============================================================================
+
+Table term_preference_selections {
+  selection_id int [pk, increment]
+  enrolment_id int [ref: > enrolments.enrolment_id]
+  caterer_id int [ref: > caterers.caterer_id]
+  menu_item_id int [ref: > menu_items.menu_item_id]
+  term_label text
+  is_acceptable boolean
+  parent_comment text
+  submitted_at timestamp
+  is_stale boolean [default: false]
+  Note: 'Parent specifies which menu items are acceptable for their child at the start of each term. The form shown to the parent is pre-filtered for dietary compatibility.'
+}
+
+Table student_session_selections {
+  selection_id int [pk, increment]
+  enrolment_id int [ref: > enrolments.enrolment_id]
+  session_id int [ref: > sessions.session_id]
+  menu_item_id int [ref: > menu_items.menu_item_id]
+  selected_at timestamp
+  selected_by text
+  Note: 'Student picks one menu item per upcoming session from their parent-approved set. selected_by: student, default, or system_assigned.'
+}
+
+
+// ============================================================================
+// SECTION 6: Order generation
+// ============================================================================
+
+Table orders {
+  order_id int [pk, increment]
+  caterer_id int [ref: > caterers.caterer_id]
+  week_starting date
+  status text
+  generated_at timestamp
+  sent_at timestamp
+  confirmed_at timestamp
+  expected_confirmation_by timestamp
+  delivered_at timestamp
+  total_estimated_cents int
+  actual_paid_cents int
+  margin_meals_per_session int
+  tutor_buffer_meals_per_session int
+  notes text
+  Note: 'One order per caterer per week. status: pending_human_review, approved, sent, confirmed, delivered, or cancelled. The full week is in view at composition time.'
+}
+
+Table order_lines {
+  line_id int [pk, increment]
+  order_id int [ref: > orders.order_id]
+  session_id int [ref: > sessions.session_id]
+  menu_item_id int [ref: > menu_items.menu_item_id]
+  enrolment_id int [ref: > enrolments.enrolment_id]
+  line_purpose text
+  is_vegetarian_variant boolean [default: false]
+  unit_price_at_order_cents int
+  submission_token text [unique]
+  status text
+  notes text
+  Note: 'line_purpose: standard, dietary, margin, or tutor_buffer. enrolment_id is set for standard and dietary lines; margin and tutor_buffer lines have enrolment_id null. submission_token is generated per line for student-served lines and used to attach incoming feedback to the correct line.'
+}
+
+Table order_economics_snapshots {
+  snapshot_id int [pk, increment]
+  order_id int [ref: > orders.order_id]
+  generated_at timestamp
+  chosen_variety_count int
+  chosen_total_cents int
+  scenario_higher_variety_cents int
+  scenario_lower_variety_cents int
+  scenario_meet_next_moq_tier_cents int
+  scenario_lower_moq_surplus_meals int
+  reasoning_notes text
+  Note: 'Alternative cost scenarios computed alongside each composed order. The operator sees not just the chosen composition but the cost of alternatives at neighbouring variety and MOQ levels.'
+}
+
+
+// ============================================================================
+// SECTION 7: Absences, exclusions, walk-ups
+// ============================================================================
+
+Table raw_absence_notifications {
+  raw_id int [pk, increment]
+  source_channel text
+  source_email_id int
+  received_at timestamp
+  raw_content text
+  parser_confidence numeric
+  canonical_absence_id int [ref: > absences.absence_id]
+  Note: 'Verbatim capture of every absence notification before any interpretation. source_channel: parent_email, school_email, web_form. Multiple raw rows can link to one canonical absence (duplicates from anxious parents).'
+}
+
+Table absences {
+  absence_id int [pk, increment]
+  enrolment_id int [ref: > enrolments.enrolment_id]
+  session_id int [ref: > sessions.session_id]
+  state text
+  received_at timestamp
+  reason text
+  walked_back_at timestamp
+  created_at timestamp
+  Note: 'Canonical record per (enrolment, session). state: notified, walked_back, or confirmed_absent. Whether an absence arrived before or after the order was sent is computed at query time from received_at compared with orders.sent_at.'
+}
+
+Table exclusions {
+  exclusion_id int [pk, increment]
+  session_id int [ref: > sessions.session_id]
+  scope text
+  scope_value text
+  reason text
+  received_at timestamp
+  source_email_id int
+  superseded_by_id int
+  acknowledged_at timestamp
+  created_at timestamp
+  Note: 'scope: whole_session, year_level, or cohort_subset. Exclusions reach the system via an operator form, not free-text parsing. Reversals are handled by setting superseded_by_id to a new exclusion record rather than mutating the original.'
+}
+
+Table walkup_events {
+  walkup_id int [pk, increment]
+  session_id int [ref: > sessions.session_id]
+  enrolment_id int [ref: > enrolments.enrolment_id]
+  walkup_student_name text
+  resolved_enrolment_id int
+  resolution_status text
+  recorded_at timestamp
+  recorded_by_tutor_id int [ref: > tutors.tutor_id]
+  created_at timestamp
+  Note: 'A student who attended a session despite an absence notification. Recorded by the manager at session end. walkup_student_name captures the name as recorded (may not initially resolve to a specific enrolment).'
+}
+
+
+// ============================================================================
+// SECTION 8: Predictions and analytics
+// ============================================================================
+
+Table absence_predictions {
+  prediction_id int [pk, increment]
+  session_id int [ref: > sessions.session_id]
+  predicted_absence_count int
+  feature_snapshot text
+  model_version text
+  confidence_score numeric
+  generated_at timestamp
+  Note: 'Per-session absence prediction. feature_snapshot stores the exact feature values used so the prediction is reproducible.'
+}
+
+Table walkup_predictions {
+  prediction_id int [pk, increment]
+  session_id int [ref: > sessions.session_id]
+  predicted_walkup_count int
+  feature_snapshot text
+  model_version text
+  confidence_score numeric
+  generated_at timestamp
+  Note: 'Per-session walkup prediction. Features include trailing per-school rate, day-of-week, calendar-week-of-term, exam-period flag, end-of-term flag.'
+}
+
+Table parent_notification_stats {
+  stat_id int [pk, increment]
+  parent_id int [ref: > parents.parent_id]
+  refresh_period_start date
+  refresh_period_end date
+  absences_notified int
+  absences_walked_back int
+  walkups_after_notification int
+  refreshed_at timestamp
+  Note: 'Per-parent reliability counts over a refresh window. Rates and trends are computed at query time from the count fields.'
+}
+
+Table session_reconciliations {
+  reconciliation_id int [pk, increment]
+  session_id int [ref: > sessions.session_id]
+  completed_at timestamp
+  actual_attendance_count int
+  walkup_count int
+  excess_meal_count int
+  shortfall_count int
+  notes text
+  completed_by_tutor_id int [ref: > tutors.tutor_id]
+  Note: 'Captured by the session manager after each session. The ground-truth feed for margin tuning, walkup prediction, and parent reliability statistics.'
+}
+
+Table dietary_trend_observations {
+  observation_id int [pk, increment]
+  observed_at timestamp
+  school_id int [ref: > schools.school_id]
+  term_label text
+  dietary_tag_id int [ref: > dietary_tags.tag_id]
+  enrolment_count int
+  trend_flag text
+  Note: 'A snapshot of how many enrolments at a school carry a given dietary tag in a given term. Term-over-term changes are computed by comparing observation rows.'
+}
+
+
+// ============================================================================
+// SECTION 9: Feedback
+// ============================================================================
+
+Table feedback {
+  feedback_id int [pk, increment]
+  feedback_type text
+  order_line_id int [ref: > order_lines.line_id]
+  submission_token text [ref: > order_lines.submission_token]
+  submitted_at timestamp
+  overall_rating int
+  received_meal boolean
+  meal_not_received_reason text
+  comments text
+  Note: 'Per-meal rating submitted by the student via a tokened link sent after the session. The submission_token resolves to a specific order_lines row, which carries the enrolment, session, and menu_item context.'
+}
+
+Table feedback_extracted_signals {
+  signal_id int [pk, increment]
+  feedback_id int [ref: > feedback.feedback_id]
+  signal_type text
+  sentiment text
+  referenced_menu_item_id int [ref: > menu_items.menu_item_id]
+  raw_excerpt text
+  extracted_at timestamp
+  extracted_by_model text
+  extraction_version text
+  Note: 'signal_type: taste, portion, temperature, presentation, freshness, or other. Extracted from free-text comments by an LLM step that runs separately from rating submission.'
+}
+
+
+// ============================================================================
+// SECTION 10: Caterer relationships
+// ============================================================================
+
+Table caterer_scorecard_snapshots {
+  snapshot_id int [pk, increment]
+  caterer_id int [ref: > caterers.caterer_id]
+  snapshot_date date
+  rolling_4_week_mean_score numeric
+  rolling_12_week_mean_score numeric
+  rolling_12_week_std_dev numeric
+  order_volume int
+  moq_compliance_rate numeric
+  cost_per_meal_cents int
+  per_dimension_scores text
+  share_url_token text
+  Note: 'Weekly snapshot of caterer performance. share_url_token grants the caterer access to their own scorecard view.'
+}
+
+Table caterer_decline_signals {
+  signal_id int [pk, increment]
+  caterer_id int [ref: > caterers.caterer_id]
+  school_id int [ref: > schools.school_id]
+  detected_at timestamp
+  current_4_week_mean numeric
+  prior_12_week_mean numeric
+  current_below_floor boolean
+  triggering_window text
+  resulting_escalation_id int
+  Note: 'Two-condition trigger: a 1-standard-deviation drop in the 4-week mean compared with the prior 12-week mean, AND the current score below a per-caterer configured floor.'
+}
+
+
+// ============================================================================
+// SECTION 11: Communications
+// ============================================================================
+
+Table incoming_emails {
+  email_id int [pk, increment]
+  message_id text
+  received_at timestamp
+  fetched_at timestamp
+  from_address text
+  from_name text
+  to_address text
+  subject text
+  body_plain text
+  body_html text
+  raw_headers text
+  attachments_info text
+  classification text
+  classified_at timestamp
+  processing_status text
+  processed_at timestamp
+  created_at timestamp
+  Note: 'Full raw capture before interpretation. classification: absence_notification, exclusion_notification, feedback, caterer_response, parent_question, unsolicited_feedback, or other.'
+}
+
+Table outbound_emails {
+  outbound_id int [pk, increment]
+  template_id int [ref: > email_templates.template_id]
+  template_version text
+  to_address text
+  cc_addresses text
+  subject text
+  rendered_body text
+  slot_fills text
+  sent_at timestamp
+  send_status text
+  related_run_id int [ref: > agent_runs.run_id]
+  related_decision_id int [ref: > decision_logs.decision_id]
+  Note: 'Rendered body stored verbatim per send. The body is reproducible even if the template is later edited.'
+}
+
+Table email_templates {
+  template_id int [pk, increment]
+  name text
+  version text
+  subject_template text
+  body_template text
+  description text
+  created_at timestamp
+  active boolean [default: true]
+}
+
+
+// ============================================================================
+// SECTION 12: Agent runtime
+// ============================================================================
+
+Table agent_runs {
+  run_id int [pk, increment]
+  trigger_type text
+  trigger_detail text
+  trigger_context text
+  intended_purpose text
+  started_at timestamp
+  finished_at timestamp
+  status text
+  agent_version text
+  model_identifiers text
+  prompt_set_version text
+  tool_registry_hash text
+  summary text
+  error_summary text
+  created_at timestamp
+  Note: 'status: running, completed, crashed, or abandoned. The version fields combined with tool_registry_hash form the version manifest for a run, supporting later replay.'
+}
+
+Table decision_logs {
+  decision_id int [pk, increment]
+  run_id int [ref: > agent_runs.run_id]
+  decision_type text
+  parent_decision_id int [ref: > decision_logs.decision_id]
+  sequence_in_run int
+  started_at timestamp
+  finished_at timestamp
+  title text
+  summary text
+  reasoning_narrative text
+  alternatives_considered text
+  chosen_option text
+  rule_applied text
+  referenced_entities text
+  tool_name text
+  tool_input text
+  tool_output_summary text
+  tier text
+  status text
+  flags text
+  created_at timestamp
+  Note: 'Tree structure via parent_decision_id. decision_type: tool_call, branch, escalation, rule_application, or result. tier: routine, notable, or escalation.'
+}
+
+Table escalations {
+  escalation_id int [pk, increment]
+  created_run_id int [ref: > agent_runs.run_id]
+  escalation_type text
+  severity text
+  state text
+  resolution_mode text
+  match_key text
+  recurrence_count int [default: 1]
+  title text
+  body text
+  drafted_action text
+  referenced_entities text
+  triggering_decision_ids text
+  created_at timestamp
+  last_observed_at timestamp
+  acknowledged_at timestamp
+  resolved_at timestamp
+  resolved_by text
+  resolution_note text
+  Note: 'state: open, acknowledged, in_progress, resolved, or superseded. severity is assigned per instance, not per type. match_key deduplicates recurring conditions into one escalation with a recurrence count.'
+}
+
+Table tool_registry {
+  tool_id int [pk, increment]
+  name text [unique]
+  description text
+  input_schema text
+  output_schema text
+  permission_scope text
+  timeout_ms int
+  retry_policy text
+  enabled boolean [default: true]
+  added_at timestamp
+  Note: 'The agent reads its available tools from this table. Adding or removing capabilities is a configuration change.'
+}

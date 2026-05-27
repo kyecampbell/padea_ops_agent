@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo \"$(date '+%Y-%m-%d %H:%M:%S') — session ended\" >> /Users/kyecampbell/Projects/padea_ops_agent/chat_history/sessions.log"
+          }
+        ]
+      }
+    ]
+  }
+}

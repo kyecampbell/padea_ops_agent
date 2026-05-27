@@ -1,0 +1,109 @@
+# Padea Operations Agent — Runtime Configuration
+# All values that tune the agent's behaviour without requiring code changes.
+# Loaded by config/settings.py at startup via PyYAML.
+# Change values here; redeploy; the next run picks them up.
+
+# =============================================================================
+# ORDER COMPOSITION
+# =============================================================================
+
+# Hours before session start that the order email is sent to the caterer.
+# V3-AI-01: locked at 72 hours. Do not reduce without caterer consultation.
+order_hours_before_session: 72
+
+# When assessing whether a year-level exclusion applies (school camp, exam block),
+# add this fraction of the excluded cohort as contingency meals, rounded up.
+# V3-OE-01 / schema relationship 12: hard-coded 10% for V3.
+exclusion_buffer_rate: 0.10
+
+# =============================================================================
+# MOQ (MINIMUM ORDER QUANTITY)
+# =============================================================================
+
+# How to escalate an MOQ shortfall. 'notable' surfaces it to the operator
+# without blocking the order. 'informational' is quieter.
+# V3-OC-01: pay the floor, notify, continue — never pad the order.
+moq_shortfall_urgency: "notable"
+
+# =============================================================================
+# QUALITY MONITORING
+# =============================================================================
+
+# Rolling mean (4-week, all filled ratings per caterer) must stay above this.
+# Below this threshold AND dropping vs 12-week prior triggers a sustained-decline escalation.
+quality_floor: 3.0
+
+# How much the 4-week mean must drop below the 12-week prior mean (in rating points)
+# to trigger the sustained-decline escalation alongside breaching quality_floor.
+quality_decline_threshold: 0.5
+
+# If tutor 1-ratings exceed this fraction of all tutor ratings in the rolling window,
+# fire a pattern escalation. E.g. 0.25 = 25% of tutor scores are 1s.
+tutor_1_pattern_threshold: 0.25
+
+# =============================================================================
+# MONDAY CONSOLIDATED SUMMARY
+# =============================================================================
+
+# ISO weekday for the consolidated summary (1=Monday, 7=Sunday).
+weekly_summary_day: 1
+
+# Clock hour (24h) for the consolidated summary trigger.
+weekly_summary_hour: 15
+
+# Clock minute for the consolidated summary trigger.
+weekly_summary_minute: 30
+
+# How many minutes either side of summary_hour:summary_minute counts as "due".
+# Prevents a run that fires at 15:32 from missing the summary.
+weekly_summary_window_minutes: 15
+
+# =============================================================================
+# EMAIL
+# =============================================================================
+
+# 'demo': all outbound emails redirect to demo_email_address.
+#         Original intended_to_address preserved in DB and email body.
+# 'production': emails go to their real recipients. NEVER set this in dev.
+email_mode: "demo"
+
+# Where demo-mode emails actually go (the developer's address).
+# Must be a real inbox you can monitor during demo day.
+demo_email_address: "kyec898@gmail.com"
+
+# Gmail OAuth token path (relative to project root).
+gmail_token_path: ".secrets/gmail_token.json"
+gmail_credentials_path: ".secrets/gmail_credentials.json"
+
+# =============================================================================
+# AGENT LOOP
+# =============================================================================
+
+# Maximum number of tool calls the agent makes in a single run.
+# V3 design: ~15. Raise with caution — each call is logged and billed.
+max_tool_calls_per_run: 15
+
+# Claude model for the agent. Update when migrating model versions.
+agent_model: "claude-sonnet-4-6"
+
+# Agent runs marked 'running' for longer than this are reclassified as 'crashed'
+# by the next run's startup check.
+crashed_run_staleness_minutes: 30
+
+# =============================================================================
+# RFP / CATERER REACH
+# =============================================================================
+
+# Default max delivery radius for caterers who haven't declared their own.
+# V3-CR-01: deliberately generous — we over-reach rather than miss caterers.
+default_caterer_max_delivery_km: 50
+
+# =============================================================================
+# DEMO / SEED DATA
+# =============================================================================
+
+# Number of contingency (buffer) meals added to every order beyond the confirmed cohort.
+# V3-MP-01: zero operational margin means NO tutor buffer, NO contingency lines.
+# The only buffer is the exclusion 10% (above) for year-level exclusions.
+# This value should be 0 for V3. Left here so V4 can introduce it cleanly.
+standard_contingency_meals: 0

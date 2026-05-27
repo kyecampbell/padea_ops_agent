@@ -1,7 +1,0 @@
-# logs/runs/
-#
-# One JSON (or JSONL) file per agent run, named by timestamp + run-id.
-# Each file captures: input context, decisions made, tools called, and outcome.
-# Used for debugging, auditing, and replaying past runs.
-#
-# Files here are gitignored — they are runtime artifacts, not source.

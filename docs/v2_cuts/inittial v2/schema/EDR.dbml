@@ -1,0 +1,218 @@
+// PADEA Catering Agent — V2 Schema
+// Ten tables. Order-to-delivery catering workflow.
+// Companion docs: summary_v2.md, schema_v2.md, cuts_v1_to_v2.md.
+
+Project padea_catering_v2 {
+  database_type: 'SQLite'
+  Note: '''
+    V2 schema for the PADEA catering agent.
+    One agent, one workflow (weekly catering order, Thursday for following week),
+    Sonnet 4.6 only, simulated email I/O via filesystem,
+    HTML decision log regenerated from agent_runs + agent_steps after each run.
+  '''
+}
+
+Table schools {
+  id integer [pk, increment]
+  name text [not null]
+  short_code text [not null, unique, note: 'e.g. MBBC, ISHS, used in displays']
+  region text
+  building text [note: 'The on-site building used for sessions; constant per school in current data']
+  current_caterer_id integer [ref: > caterers.id, note: 'The caterer currently serving this school']
+
+  Note: 'Each school has exactly one current caterer; modelled as a column rather than a junction.'
+}
+
+Table caterers {
+  id integer [pk, increment]
+  name text [not null]
+  contact_email text [not null, note: 'The order-taker; orders are sent to this address']
+  cc_email text [note: 'Cc on orders where the data calls for it; nullable']
+  manager_phone text [note: 'Caterer-side contact phone; used in escalation copy']
+  price_per_item_aud real [not null]
+  price_includes_gst integer [not null, note: '0 or 1; SQLite boolean']
+  delivery_fee_aud real [not null, default: 0]
+  delivery_fee_structure text [not null, note: 'flat_per_trip | per_school_per_trip | none']
+  lead_time_days integer [not null, note: 'Minimum days between send and earliest session in the week']
+  moq_4_items integer [note: 'Weekly minimum total at 4-item variety']
+  moq_5_items integer [note: 'Weekly minimum total at 5-item variety']
+  moq_6_items integer [note: 'Weekly minimum total at 6-item variety']
+
+  Note: 'MOQ tiers denormalised as three columns; data has exactly three tiers fixed across all caterers.'
+}
+
+Table menu_items {
+  id integer [pk, increment]
+  caterer_id integer [not null, ref: > caterers.id]
+  name text [not null, note: 'As written in the source menu']
+  contains_pork integer [not null, note: '0 or 1; drives halal derivation (non-pork = halal per legend)']
+  gluten_free integer [not null, default: 0]
+  dairy_free integer [not null, default: 0]
+  nut_free integer [not null, default: 0]
+  vegetarian_option_available integer [not null, default: 0, note: 'VO annotation: caterer can substitute a vegetarian variant; the item itself is not vegetarian']
+  is_vegetarian integer [not null, default: 0, note: 'The item as listed is vegetarian']
+
+  Note: '''
+    Dietary properties resolved at ingest, not at runtime.
+    Ambiguous-protein items (e.g. "Spaghetti meatballs") default to contains_pork=1 conservatively
+    until the actual recipe is human-confirmed.
+  '''
+}
+
+Table session_slots {
+  id integer [pk, increment]
+  school_id integer [not null, ref: > schools.id]
+  day_of_week text [not null, note: 'Mon | Tue | Wed | Thu']
+  start_time text [not null, note: 'e.g. 15:30 (24-hour)']
+  dinner_time text [not null, note: 'e.g. 17:00']
+  manager_name text [note: 'Default session manager for this slot']
+  manager_phone text [note: 'Manager mobile, for caterer-to-manager calls on the day']
+
+  Note: '''
+    Recurring (school, day-of-week) templates, not dated rows.
+    Concrete sessions for a given date are derived by looking up slots
+    for the day-of-week and applying whole-session exclusions.
+  '''
+}
+
+Table enrolments {
+  id integer [pk, increment]
+  school_id integer [not null, ref: > schools.id]
+  student_name text [not null, note: 'As written in source data']
+  year_level integer [not null, note: '9, 10, 11, or 12']
+  dietary_text text [note: 'Raw text from the dietary column; preserved verbatim for audit']
+  dietary_flags text [note: 'JSON: parsed flags, e.g. {"halal": true, "vegetarian": false, ...}']
+  opted_out_of_catering integer [not null, default: 0, note: 'Parsed out of dietary text at ingest']
+  acceptable_menu_item_ids text [note: 'JSON list of menu_items.id the student accepts; null means "all dietary-compliant items acceptable"']
+  parent_email text [note: 'For absence intake matching']
+  parent_name text [note: 'For escalation copy']
+
+  indexes {
+    school_id [name: 'idx_enrolments_school']
+  }
+
+  Note: '''
+    No separate students table. Each enrolment row carries the student name directly.
+    Cross-school name matches treated as different students by default (non-collapse).
+    dietary_text is the audit trail; dietary_flags is what the agent reasons over.
+  '''
+}
+
+Table exclusions {
+  id integer [pk, increment]
+  date text [not null, note: 'ISO date YYYY-MM-DD']
+  school_id integer [not null, ref: > schools.id]
+  scope text [not null, note: 'whole_session | partial']
+  excluded_year_levels text [note: 'JSON list of year levels excluded; null when scope is whole_session']
+  reason text [note: 'Free-text reason, for the decision log']
+
+  indexes {
+    date [name: 'idx_exclusions_date']
+  }
+
+  Note: 'Exclusions arrive manually via operator entry. Reversals handled by deleting the row.'
+}
+
+Table absences {
+  id integer [pk, increment]
+  date text [not null, note: 'ISO date the absence applies to']
+  enrolment_id integer [not null, ref: > enrolments.id]
+  received_at text [not null, note: 'ISO timestamp when the absence was recorded']
+  source_email_filename text [note: 'Filename of the raw email in emails/incoming/; null if entered another way']
+
+  indexes {
+    date [name: 'idx_absences_date']
+    enrolment_id [name: 'idx_absences_enrolment']
+  }
+
+  Note: '''
+    Only absences received before the order send time count against the order.
+    Absences received after the send do not reduce the order; the operational margin absorbs walk-ups.
+    Walk-backs handled manually in V2 by deleting the absence row.
+  '''
+}
+
+Table orders {
+  id integer [pk, increment]
+  week_start_date text [not null, note: 'ISO date for the Monday of the week the order covers']
+  caterer_id integer [not null, ref: > caterers.id]
+  status text [not null, note: 'draft | sent | confirmed | escalated | cancelled']
+  composed_at text [note: 'ISO timestamp']
+  sent_at text [note: 'ISO timestamp; null until sent']
+  confirmed_at text [note: 'ISO timestamp; null until confirmed']
+  email_subject text [note: 'The subject line sent']
+  email_body text [note: 'The full email body sent — the audit trail for what the caterer received']
+  meal_assignments text [not null, note: 'JSON: list of {enrolment_id, menu_item_id, vegetarian_substitution: bool}']
+  total_items integer [not null, note: 'Headline count including operational margin']
+  total_cost_aud real [not null, note: 'Computed at composition time']
+  variety_chosen integer [not null, note: '4, 5, or 6 — the menu-item count chosen for this order']
+  escalation_reason text [note: 'If status is escalated, why; otherwise null']
+
+  indexes {
+    week_start_date [name: 'idx_orders_week']
+  }
+
+  Note: '''
+    One row per (caterer, week_start_date). Per-student meal assignments held as JSON
+    rather than a separate order_lines table — they are read and written together
+    and never queried independently in V2.
+  '''
+}
+
+Table agent_runs {
+  id integer [pk, increment]
+  started_at text [not null, note: 'ISO timestamp']
+  ended_at text [note: 'ISO timestamp; null while running']
+  status text [not null, note: 'running | completed | errored | escalated']
+  summary text [note: 'One-paragraph natural-language summary written at run end by the agent']
+  tool_calls_total integer [not null, default: 0]
+  escalation_count integer [not null, default: 0]
+
+  Note: 'One row per agent invocation. The summary is what appears at the top of the decision log.'
+}
+
+Table agent_steps {
+  id integer [pk, increment]
+  run_id integer [not null, ref: > agent_runs.id]
+  step_index integer [not null, note: 'Sequential within the run']
+  timestamp text [not null, note: 'ISO timestamp']
+  tool_name text [not null, note: 'The function the agent called']
+  reasoning text [note: "Claude reasoning preceding the call, captured from the response"]
+  tool_input text [note: 'JSON: the arguments passed']
+  tool_output_summary text [note: 'A one-line summary of what the tool returned']
+  tool_output_full text [note: 'JSON: the full structured result']
+  severity text [not null, note: 'info | warn | escalation — drives the colour in the decision log']
+
+  indexes {
+    (run_id, step_index) [name: 'idx_agent_steps_run']
+  }
+
+  Note: '''
+    Every tool call captured. The decision log HTML reads directly from this table.
+    The tool_output_summary vs tool_output_full split lets the log show a one-line preview
+    by default and expand to the full payload on click.
+  '''
+}
+
+// ─────────────────────────────────────────────────────────────
+// Table groups for visual layout in dbdiagram
+// ─────────────────────────────────────────────────────────────
+
+TableGroup operational {
+  schools
+  caterers
+  menu_items
+  session_slots
+  enrolments
+}
+
+TableGroup weekly_state {
+  exclusions
+  absences
+  orders
+}
+
+TableGroup observability {
+  agent_runs
+  agent_steps
+}

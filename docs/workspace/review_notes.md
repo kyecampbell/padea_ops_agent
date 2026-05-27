@@ -27,3 +27,12 @@ assumptions
 
 to assume if havent already
 assume any multi enrollments accross one school are the same student. as there is no way to distinguish beyond this. further explore this edge case. 
+
+## On the communications layer (from Group 7)
+
+- **Real bidirectional email as a Taste call.** We considered three levels of email simulation (filesystem-only, real-out + simulated-in, real bidirectional). Real bidirectional via the Gmail API won because the demo video is materially more credible when judges see real emails moving through real channels. Demo mode rewrites recipients to a dev address; production mode is one config flag away.
+- **Database as source of truth, Gmail as transport.** Audit lives in the database, not in the mail server. Deliberate inversion of the "Gmail's sent folder is our audit" instinct.
+- **Templates in code, with a V4 migration trigger.** Templates stay as Python format strings during V3 because every editor is an engineer. Migration trigger to database-stored templates: when non-engineering operators need to edit copy.
+- **Unclassified inbound as escalation, not as a new domain table.** Operator workflow for handling weird inbound is "read the email and decide" — doesn't benefit from structured rows. File-on-disk + escalation row with context = sufficient.
+- **Outbound emails table became load-bearing once email went real.** Was MEDIUM as audit-only; became STRONG once send failures could actually happen. Real failures need a row to escalate from.
+- **Demo-mode address rewrite as a deliberate safety mechanism.** The flag is loud, logged at every send, and defaults to demo mode. The rewrite is a guard against accidentally emailing real caterers from a dev environment.

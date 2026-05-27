@@ -41,8 +41,16 @@ emails/outgoing/drafts/
 *.sqlite
 *.sqlite3
 
-# ── Claude Code project settings (machine-specific) ───────────────────────────
-.claude/
+# ── Claude Code project settings ─────────────────────────────────────────────
+# .claude/settings.json is committed (has Stop hook for chat history).
+# Only ignore the local overrides file.
+.claude/settings.local.json
+
+# ── Gmail OAuth secrets (never commit) ────────────────────────────────────────
+.secrets/
+
+# ── Chat history (session log appended by hook; .md summaries are committed) ──
+chat_history/sessions.log
 
 # ── OS / editor noise ─────────────────────────────────────────────────────────
 .DS_Store
