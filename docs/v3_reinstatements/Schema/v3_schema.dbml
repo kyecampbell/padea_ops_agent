@@ -108,24 +108,24 @@ Table caterers {
 }
 
 Table menu_items {
-  id                  bigserial       [pk]
-  caterer_id          bigint          [not null, ref: > caterers.id]
-  name                text            [not null]
-  description         text
-  price_cents         integer         [not null, note: 'V3-OC-01: overwrite-in-place, no history']
-  contains_pork       boolean         [not null, default: false]
-  is_vegetarian       boolean         [not null, default: false]
-  is_vegan            boolean         [not null, default: false]
-  is_halal            boolean         [not null, default: false]
-  is_gluten_free      boolean         [not null, default: false]
-  contains_seafood    boolean         [not null, default: false]
-  contains_nuts       boolean         [not null, default: false]
-  contains_dairy      boolean         [not null, default: false]
-  active              boolean         [not null, default: true]
-  created_at          timestamptz     [not null, default: `now()`]
-  updated_at          timestamptz     [not null, default: `now()`]
+  id               bigserial       [pk]
+  caterer_id       bigint          [not null, ref: > caterers.id]
+  name             text            [not null]
+  description      text
+  price_cents      integer         [not null, note: 'V3-OC-01: overwrite-in-place, no history']
+  contains_pork    boolean         [not null, default: false]
+  is_vegetarian    boolean         [not null, default: false]
+  is_vegan         boolean         [not null, default: false]
+  is_halal         boolean         [not null, default: false]
+  is_gluten_free   boolean         [not null, default: false]
+  contains_seafood boolean         [not null, default: false]
+  contains_nuts    boolean         [not null, default: false]
+  contains_dairy   boolean         [not null, default: false]
+  active           boolean         [not null, default: true]
+  created_at       timestamptz     [not null, default: `now()`]
+  updated_at       timestamptz     [not null, default: `now()`]
 
-  Note: 'Per-caterer menu. Prices overwrite in place per V3-OC-01.'
+  Note: 'Per-caterer menu. Prices overwrite in place per V3-OC-01. Dietary properties stored as boolean columns.'
 }
 
 Table tutors {
@@ -147,13 +147,13 @@ Table tutors {
 
 Table dietary_tags {
   id          bigserial       [pk]
-  name        text            [not null, unique, note: 'e.g. no_pork, halal']
+  name        text            [not null, unique, note: 'e.g. no_pork, halal, vegetarian']
   label       text            [not null, note: 'Human-facing label']
-  description text
+  description text            [note: 'Student-facing description of the requirement, e.g. "Kid does not eat pork"']
   active      boolean         [not null, default: true]
   created_at  timestamptz     [not null, default: `now()`]
 
-  Note: 'V3-FB-01: controlled vocabulary. No severity field per V3-AI-01 — every tag is safety-critical by default.'
+  Note: 'V3-FB-01: vocabulary for student dietary requirements in enrolment_dietary_tags. Tags describe what a student needs. No severity field per V3-AI-01 — every tag treated as safety-critical.'
 }
 
 // =============================================================================
@@ -187,7 +187,7 @@ Table enrolment_dietary_tags {
     (enrolment_id, dietary_tag_id) [pk]
   }
 
-  Note: 'V3-FB-01: junction between enrolments and dietary_tags.'
+  Note: 'V3-FB-01: junction between enrolments and dietary_tags. Tag means "this student requires this property."'
 }
 
 // =============================================================================

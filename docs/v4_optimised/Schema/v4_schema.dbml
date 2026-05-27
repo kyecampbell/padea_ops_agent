@@ -1,0 +1,515 @@
+// =============================================================================
+// PADEA Operations Agent — V4 Database Schema (DBML)
+// =============================================================================
+// Paste into https://dbdiagram.io to visualise.
+// V4 = V3 + post-review optimisations:
+//   V4-OPT-01  updated_at trigger function (not represented in DBML)
+//   V4-OPT-02  Three new enums: order_rotation_status, preference_capture_source,
+//              order_line_source (order_line_source and preference_captured_by
+//              were already in the V3 DBML but not wired into SQL — now they are)
+//   V4-OPT-03  UNIQUE constraint on outbound_emails.gmail_message_id
+//   V4-OPT-04  caterer_id denormalised onto feedback
+//   V4-OPT-05  gst_rate_percent snapshotted onto orders
+// =============================================================================
+
+Project padea_v4 {
+  database_type: 'PostgreSQL'
+  Note: 'PADEA Operations Agent V4 schema. V4 = V3 + post-review optimisations: updated_at triggers (OPT-01), three enum promotions (OPT-02), UNIQUE on gmail_message_id (OPT-03), denormalised caterer_id on feedback (OPT-04), snapshotted GST rate on orders (OPT-05), menu_item dietary booleans replaced with junction table (OPT-06).'
+}
+
+// =============================================================================
+// ENUMS
+// =============================================================================
+
+Enum email_type {
+  session_order                    [note: 'Per-session, T-72hrs, binding']
+  weekly_consolidated_summary      [note: 'Monday 3:30 PM per caterer']
+  warning                          [note: 'Decline-detection warning to incumbent']
+  rfp                              [note: 'Request for proposal to candidates']
+  cancellation                     [note: 'Cancellation notice to outgoing caterer']
+  rfp_loser_courtesy               [note: 'Thanks-but-no to RFP losers']
+  parent_enrolment                 [note: 'Term-start parent email']
+  parent_reminder                  [note: 'Chase reminder']
+  opt_back_in_request_to_parent    [note: 'Tutor-triggered, autonomous']
+  operator_notification            [note: 'System-to-operator escalation']
+  other
+}
+
+Enum email_status {
+  drafted
+  queued_for_approval
+  approved
+  sending
+  sent
+  failed
+}
+
+Enum step_urgency {
+  urgent          [note: 'Gating something']
+  notable         [note: 'Pattern worth investigating']
+  informational   [note: 'Audit trail']
+  none            [note: 'Routine tool call']
+}
+
+Enum feedback_source {
+  tutor
+  manager
+}
+
+Enum inbound_classification {
+  absence
+  caterer_order_confirmation
+  caterer_price_change_notification
+  parent_enrolment_response
+  unclassified
+}
+
+// V4-OPT-02: replaces text on orders.rotation_status
+// Values from V3 column comment: 'normal', 'warning_active', 'rfp_pending'
+Enum order_rotation_status {
+  normal
+  warning_active
+  rfp_pending
+}
+
+// V4-OPT-02: replaces text CHECK on term_meal_preferences.captured_by
+// Values from V3 CHECK constraint: ('parent', 'tutor', 'operator')
+Enum preference_capture_source {
+  parent
+  tutor
+  operator
+}
+
+// V4-OPT-02: replaces text CHECK on order_lines.source
+// Values from V3 CHECK constraint: ('rotation', 'request', 'preview_week_operator', 'dietary_auto_pick')
+Enum order_line_source {
+  rotation
+  request
+  preview_week_operator
+  dietary_auto_pick
+}
+
+// =============================================================================
+// CORE ENTITIES
+// =============================================================================
+
+Table schools {
+  id                  bigserial       [pk]
+  name                text            [not null]
+  building            text            [note: 'V2 inherited']
+  postcode            text            [not null, note: 'V3-CR-01: distance calc']
+  current_caterer_id  bigint          [ref: > caterers.id, note: 'Single caterer per school']
+  created_at          timestamptz     [not null, default: `now()`]
+  updated_at          timestamptz     [not null, default: `now()`, note: 'V4-OPT-01: auto-maintained by trigger']
+
+  Note: 'Padea school locations. One row per school.'
+}
+
+Table caterers {
+  id                      bigserial       [pk]
+  name                    text            [not null]
+  contact_email           text            [not null]
+  contact_phone           text
+  home_postcode           text            [not null, note: 'V3-CR-01']
+  max_delivery_km         integer         [not null, default: 50, note: 'V3-CR-01: generous default']
+  delivery_fee_cents      integer         [not null, default: 0]
+  price_includes_gst      boolean         [not null, default: false]
+  gst_rate_percent        "numeric(4,2)"  [not null, default: 10.0]
+  moq_4_items             integer         [note: 'V2 inherited MOQ tiers']
+  moq_5_items             integer
+  moq_6_items             integer
+  canonical_menu_order    jsonb           [note: 'V3-OC-01: popularity-ranked snapshot, JSON array of menu_item ids']
+  canonical_order_set_at  timestamptz
+  created_at              timestamptz     [not null, default: `now()`]
+  updated_at              timestamptz     [not null, default: `now()`, note: 'V4-OPT-01: auto-maintained by trigger']
+
+  Note: 'Catering suppliers. V3-OC-01: canonical_menu_order is a popularity-ranked snapshot at term start plus caterer change.'
+}
+
+Table menu_items {
+  id                  bigserial       [pk]
+  caterer_id          bigint          [not null, ref: > caterers.id]
+  name                text            [not null]
+  description         text
+  price_cents         integer         [not null, note: 'V3-OC-01: overwrite-in-place, no history']
+  active              boolean         [not null, default: true]
+  created_at          timestamptz     [not null, default: `now()`]
+  updated_at          timestamptz     [not null, default: `now()`, note: 'V4-OPT-01: auto-maintained by trigger']
+
+  Note: 'Per-caterer menu. Prices overwrite in place per V3-OC-01. V4-OPT-06: 8 boolean dietary columns (contains_pork, is_halal, etc.) removed; dietary properties now via menu_item_dietary_tags junction.'
+}
+
+Table tutors {
+  id                  bigserial       [pk]
+  name                text            [not null]
+  email               text
+  mobile              text
+  employee_identifier text
+  active              boolean         [not null, default: true]
+  created_at          timestamptz     [not null, default: `now()`]
+  updated_at          timestamptz     [not null, default: `now()`, note: 'V4-OPT-01: auto-maintained by trigger']
+
+  Note: 'V3-IL-01: tutors first-class. Also covers session managers via dual-role flags on session_tutor_assignments.'
+}
+
+// =============================================================================
+// DIETARY VOCABULARY (V3-FB-01)
+// =============================================================================
+
+Table dietary_tags {
+  id          bigserial       [pk]
+  name        text            [not null, unique, note: 'e.g. no_pork, halal, vegetarian']
+  label       text            [not null, note: 'Human-facing label']
+  description text            [note: 'V4-OPT-06: neutral description (e.g. "Pork-free") — applies to both students (requirement) and items (satisfied property). V3 had student-facing descriptions.']
+  active      boolean         [not null, default: true]
+  created_at  timestamptz     [not null, default: `now()`]
+
+  Note: 'V3-FB-01: shared vocabulary for enrolment_dietary_tags and menu_item_dietary_tags (V4-OPT-06). On a student: "I need this." On an item: "I satisfy this." Safety check: item tags ⊇ student tags. No severity field per V3-AI-01.'
+}
+
+// =============================================================================
+// ENROLMENTS (V3-IL-01, V3-EL-01, V3-PV-01)
+// =============================================================================
+
+Table enrolments {
+  id                          bigserial       [pk]
+  school_id                   bigint          [not null, ref: > schools.id]
+  student_name                text            [not null, note: 'V3-IL-01: denormalised; operator uses distinguishable names']
+  student_year_level          integer
+  parent_name                 text            [not null, note: 'V3-IL-01: denormalised']
+  parent_email                text            [not null]
+  parent_phone                text
+  original_start_date         date            [not null, note: 'V3-EL-01: never changes after creation']
+  current_period_start_date   date            [not null, note: 'V3-EL-01: updated on return after departure']
+  current_period_end_date     date            [note: 'V3-EL-01: null while active']
+  opted_out_of_catering       boolean         [not null, default: false, note: 'V3-PV-01: default false means catering is on']
+  other_allergy_notes         text            [note: 'Free-text restriction outside dietary_tags vocabulary; non-null triggers operator escalation']
+  created_at                  timestamptz     [not null, default: `now()`]
+  updated_at                  timestamptz     [not null, default: `now()`, note: 'V4-OPT-01: auto-maintained by trigger']
+
+  Note: 'V3-IL-01: kid-at-school with denormalised student and parent identity. V3-EL-01: three-date lifecycle. Active state derived as (end_date IS NULL OR end_date > date_of_interest).'
+}
+
+Table enrolment_dietary_tags {
+  enrolment_id    bigint          [ref: > enrolments.id]
+  dietary_tag_id  bigint          [ref: > dietary_tags.id]
+  captured_at     timestamptz     [not null, default: `now()`]
+
+  indexes {
+    (enrolment_id, dietary_tag_id) [pk]
+    enrolment_id
+  }
+
+  Note: 'V3-FB-01: junction between enrolments and dietary_tags. Tag means "this student requires this property."'
+}
+
+Table menu_item_dietary_tags {
+  menu_item_id    bigint          [ref: > menu_items.id]
+  dietary_tag_id  bigint          [ref: > dietary_tags.id]
+
+  indexes {
+    (menu_item_id, dietary_tag_id) [pk]
+    dietary_tag_id
+  }
+
+  Note: 'V4-OPT-06: new junction table replacing 8 boolean columns on menu_items. Tag means "this item satisfies this property." Safety rule: item tags ⊇ student tags (set containment, not boolean ANDs).'
+}
+
+// =============================================================================
+// SESSION OPERATIONS (V3-AI-01, V3-IL-01)
+// =============================================================================
+
+Table session_slots {
+  id              bigserial       [pk]
+  school_id       bigint          [not null, ref: > schools.id]
+  day_of_week     integer         [not null, note: '1 equals Mon up to 7 equals Sun']
+  start_time      time            [not null]
+  dinner_time     time            [not null]
+  end_time        time            [not null]
+  room            text            [note: 'V3-AI-01: e.g. Building A, Room 12']
+  active          boolean         [not null, default: true]
+  created_at      timestamptz     [not null, default: `now()`]
+  updated_at      timestamptz     [not null, default: `now()`, note: 'V4-OPT-01: auto-maintained by trigger']
+
+  indexes {
+    (school_id, day_of_week) [unique]
+  }
+
+  Note: 'Recurring (school, day-of-week) sessions. V3-IL-01: manager_name and manager_phone columns dropped — see session_tutor_assignments.'
+}
+
+Table session_tutor_assignments {
+  id              bigserial       [pk]
+  session_slot_id bigint          [not null, ref: > session_slots.id]
+  session_date    date            [not null]
+  tutor_id        bigint          [not null, ref: > tutors.id]
+  is_manager      boolean         [not null, default: false]
+  is_tutor        boolean         [not null, default: false]
+  assigned_at     timestamptz     [not null, default: `now()`]
+
+  indexes {
+    (session_slot_id, session_date, tutor_id) [unique]
+    (session_slot_id, session_date)
+  }
+
+  Note: 'V3-IL-01: dual-role booleans (is_manager + is_tutor) handle all four combinations. Per-session granularity supports per-date manager variation.'
+}
+
+Table exclusions {
+  id              bigserial       [pk]
+  school_id       bigint          [ref: > schools.id, note: 'Null means system-wide']
+  enrolment_id    bigint          [ref: > enrolments.id, note: 'Null means full-school exclusion']
+  start_date      date            [not null]
+  end_date        date            [not null]
+  reason          text            [note: 'school holiday, exam week, etc.']
+  created_at      timestamptz     [not null, default: `now()`]
+
+  indexes {
+    (school_id, start_date, end_date)
+    (enrolment_id, start_date, end_date)
+  }
+
+  Note: 'V2 inherits. V3-EL-01: school holidays bulk-inserted here at term-end.'
+}
+
+Table absences {
+  id                          bigserial       [pk]
+  enrolment_id                bigint          [not null, ref: > enrolments.id]
+  absence_date                date            [not null]
+  received_at                 timestamptz     [not null, default: `now()`]
+  source_email_filename       text            [note: 'V2 legacy']
+  source_email_message_id     text            [note: 'V3-CM-01: Gmail message ID']
+  notes                       text
+
+  indexes {
+    (enrolment_id, absence_date) [unique]
+  }
+
+  Note: 'Parent-notified absences. V3-CM-01: Gmail message ID added alongside V2 filename.'
+}
+
+// =============================================================================
+// PREFERENCES + REQUESTS (V3-FB-01)
+// =============================================================================
+
+Table term_meal_preferences {
+  id              bigserial                   [pk]
+  enrolment_id    bigint                      [not null, ref: > enrolments.id]
+  caterer_id      bigint                      [not null, ref: > caterers.id]
+  captured_at     timestamptz                 [not null, default: `now()`]
+  // V4-OPT-02: was text CHECK ('parent','tutor','operator'); now typed enum
+  captured_by     preference_capture_source   [not null, note: 'parent at term start, tutor on caterer change, operator for mid-term']
+  superseded_at   timestamptz                 [note: 'Null means current; set when replaced']
+  notes           text
+
+  indexes {
+    (enrolment_id, caterer_id)
+  }
+
+  Note: 'V3-FB-01: per (enrolment, caterer) approved meal set. Supersession-aware so old sets archive on caterer swap.'
+}
+
+Table term_meal_preference_items {
+  preference_id   bigint          [ref: > term_meal_preferences.id]
+  menu_item_id    bigint          [ref: > menu_items.id]
+
+  indexes {
+    (preference_id, menu_item_id) [pk]
+  }
+
+  Note: 'V3-FB-01: junction. Which menu items are in this preference set.'
+}
+
+Table meal_requests {
+  id              bigserial       [pk]
+  enrolment_id    bigint          [not null, ref: > enrolments.id]
+  session_slot_id bigint          [not null, ref: > session_slots.id]
+  session_date    date            [not null]
+  menu_item_id    bigint          [not null, ref: > menu_items.id]
+  requested_at    timestamptz     [not null, default: `now()`]
+  consumed_at     timestamptz     [note: 'Set when order composition uses it']
+
+  indexes {
+    (enrolment_id, session_slot_id, session_date) [unique]
+  }
+
+  Note: 'V3-FB-01: per-kid per-session one-off override. Filed via tutor app. Drawn from full dietary-safe menu, not just approved set.'
+}
+
+// =============================================================================
+// ORDERS (V3-FB-01, V3-OC-01, V3-AI-01)
+// =============================================================================
+
+Table orders {
+  id                      bigserial               [pk]
+  session_slot_id         bigint                  [not null, ref: > session_slots.id]
+  caterer_id              bigint                  [not null, ref: > caterers.id]
+  session_date            date                    [not null]
+  total_items             integer                 [not null, note: 'V3-MP-01: zero margin means exact expected cohort']
+  total_cost_cents        integer                 [not null, note: 'V3-OC-01: predicted total at compose time']
+  // V4-OPT-05: snapshot of caterers.gst_rate_percent at composition time
+  gst_rate_percent        "numeric(5,2)"          [not null, note: 'V4-OPT-05: GST rate at order-composition time; snapshot for historical accuracy']
+  moq_floor_applied       boolean                 [not null, default: false, note: 'V3-OC-01']
+  moq_variance_cents      integer                 [not null, default: 0]
+  composed_at             timestamptz             [not null, default: `now()`]
+  sent_at                 timestamptz
+  is_preview_week         boolean                 [not null, default: false, note: 'V3-FB-01: new-caterer preview']
+  // V4-OPT-02: was text; now typed enum
+  rotation_status         order_rotation_status   [note: 'V4-OPT-02: was text; now typed enum']
+
+  indexes {
+    (session_slot_id, session_date) [unique]
+    (caterer_id, session_date)
+  }
+
+  Note: 'V3-AI-01: per-session orders at T-72hrs. V3-MP-01: zero operational margin. V4-OPT-05: gst_rate_percent snapshotted. V4-OPT-02: rotation_status typed.'
+}
+
+Table order_lines {
+  id              bigserial               [pk]
+  order_id        bigint                  [not null, ref: > orders.id]
+  enrolment_id    bigint                  [not null, ref: > enrolments.id]
+  menu_item_id    bigint                  [not null, ref: > menu_items.id]
+  // V4-OPT-02: was text CHECK; now typed enum
+  source          order_line_source       [not null, note: 'V4-OPT-02: was text CHECK; now typed enum']
+
+  indexes {
+    (order_id, enrolment_id) [unique]
+    enrolment_id
+  }
+
+  Note: 'V3-FB-01: per-meal-per-kid rows promoted from V2 meal_assignments JSON. Required so feedback can attach.'
+}
+
+// =============================================================================
+// FEEDBACK (V3-FB-01)
+// =============================================================================
+
+Table feedback {
+  id                      bigserial           [pk]
+  source                  feedback_source     [not null]
+  order_line_id           bigint              [ref: > order_lines.id, note: 'Set when source equals tutor']
+  order_id                bigint              [ref: > orders.id, note: 'Set when source equals manager']
+  tutor_id                bigint              [ref: > tutors.id]
+  // V4-OPT-04: denormalised for rolling-mean hot path (no joins needed)
+  caterer_id              bigint              [not null, ref: > caterers.id, note: 'V4-OPT-04: intentionally denormalised — caterer never changes retroactively; eliminates 2-join path for rolling-mean queries']
+  rating                  integer             [note: 'V3-FB-01: 1 to 5, nullable (null means did not fill in)']
+  comment                 text
+  food_on_time            boolean             [note: 'Manager-only checklist']
+  correct_count_received  boolean             [note: 'Manager-only checklist']
+  correct_dietary_delivered boolean           [note: 'Manager-only checklist']
+  food_temperature_ok     boolean             [note: 'Manager-only checklist']
+  visibly_wrong           boolean             [note: 'Manager-only checklist']
+  meals_left              integer             [note: 'Manager-only']
+  kids_who_didnt_eat      text                [note: 'Manager-only, free-text']
+  submitted_at            timestamptz         [not null, default: `now()`]
+
+  indexes {
+    // V4-OPT-04: primary index for rolling-mean queries
+    (caterer_id, submitted_at)
+    submitted_at
+    order_id
+    order_line_id
+  }
+
+  Note: 'V3-FB-01: polymorphic. Tutor source attaches to order_line; manager source attaches to order. Null rating means did not fill in. V4-OPT-04: caterer_id denormalised for rolling-mean performance.'
+}
+
+Table opt_back_in_requests {
+  id                  bigserial       [pk]
+  enrolment_id        bigint          [not null, ref: > enrolments.id]
+  session_slot_id     bigint          [not null, ref: > session_slots.id]
+  session_date        date            [not null]
+  submitted_by_tutor  bigint          [ref: > tutors.id]
+  submitted_at        timestamptz     [not null, default: `now()`]
+  email_sent_at       timestamptz     [note: 'Null means no email fired yet']
+  parent_resolved_at  timestamptz     [note: 'Null means parent has not responded']
+
+  indexes {
+    (enrolment_id, email_sent_at)
+  }
+
+  Note: 'V3-MP-01: tutor opt-back-in checkbox ticks. Send-once tracking via email_sent_at — first tick per opt-out period fires email; subsequent ticks record but do not re-send.'
+}
+
+// =============================================================================
+// COMMUNICATIONS (V3-CM-01)
+// =============================================================================
+
+Table outbound_emails {
+  id                          bigserial           [pk]
+  email_type                  email_type          [not null]
+  status                      email_status        [not null, default: 'drafted']
+  intended_to_address         text                [not null, note: 'Production recipient (demo mode rewrites actual send)']
+  intended_cc_addresses       jsonb               [note: 'Array of strings']
+  subject                     text                [not null]
+  rendered_body               text                [not null]
+  composed_at                 timestamptz         [not null, default: `now()`]
+  queued_for_approval_at      timestamptz
+  approved_at                 timestamptz
+  approved_by                 text
+  sent_at                     timestamptz
+  failed_at                   timestamptz
+  failure_reason              text
+  // V4-OPT-03: UNIQUE constraint replaces V3 partial index; Postgres allows multiple NULLs
+  gmail_message_id            text                [unique, note: 'V4-OPT-03: UNIQUE constraint (multiple NULLs allowed); was partial index in V3']
+  related_run_id              bigint              [ref: > agent_runs.id]
+  related_step_id             bigint              [ref: > agent_steps.id]
+  related_order_id            bigint              [ref: > orders.id]
+  related_caterer_id          bigint              [ref: > caterers.id]
+  related_enrolment_id        bigint              [ref: > enrolments.id]
+
+  indexes {
+    status
+    (email_type, intended_to_address)
+  }
+
+  Note: 'V3-CM-01: every system-sent email. V4-OPT-03: gmail_message_id now UNIQUE (replaces partial index).'
+}
+
+Table inbound_email_records {
+  gmail_message_id        text                        [pk]
+  received_at             timestamptz                 [not null]
+  from_address            text                        [not null]
+  subject                 text
+  classified_as           inbound_classification      [not null]
+  classified_at           timestamptz                 [not null, default: `now()`]
+  related_absence_id      bigint                      [ref: > absences.id]
+  related_order_id        bigint                      [ref: > orders.id]
+  related_enrolment_id    bigint                      [ref: > enrolments.id]
+
+  Note: 'V3-CM-01: minimal dedup table keyed on gmail_message_id. Prevents double-processing across closely-spaced runs.'
+}
+
+// =============================================================================
+// OBSERVABILITY (V3-OE-01)
+// =============================================================================
+
+Table agent_runs {
+  id              bigserial       [pk]
+  started_at      timestamptz     [not null, default: `now()`]
+  completed_at    timestamptz
+  trigger_reason  text            [not null, note: 'session_order_t72 or monday_summary or manual']
+  notes           text
+
+  Note: 'V2 inherits. V3-AI-01: about 5 to 7 invocations per week under per-session cadence.'
+}
+
+Table agent_steps {
+  id                  bigserial           [pk]
+  run_id              bigint              [not null, ref: > agent_runs.id]
+  step_index          integer             [not null]
+  tool_name           text
+  tool_input          jsonb
+  tool_output_full    jsonb
+  reasoning           text
+  urgency             step_urgency        [not null, default: 'none', note: 'V3-OE-01: three-tier']
+  created_at          timestamptz         [not null, default: `now()`]
+
+  indexes {
+    (run_id, step_index) [unique]
+    (run_id, urgency, step_index)
+  }
+
+  Note: 'V2 step model plus V3-OE-01 urgency enum. Decision log renderer sorts by (urgency rank desc, step_index asc) and colour-codes.'
+}

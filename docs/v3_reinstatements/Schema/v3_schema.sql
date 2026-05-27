@@ -165,6 +165,7 @@ ALTER TABLE schools
 -- ---------------------------------------------------------------------------
 -- menu_items — what each caterer offers.
 -- V2 inherits. V3-OC-01: prices overwrite in place (no history table).
+-- Dietary properties stored as boolean columns directly on this table.
 -- ---------------------------------------------------------------------------
 CREATE TABLE menu_items (
     id              bigserial PRIMARY KEY,
@@ -172,22 +173,20 @@ CREATE TABLE menu_items (
     name            text NOT NULL,
     description     text,
     price_cents     integer NOT NULL,           -- V3-OC-01: overwrite-in-place, no history
-    contains_pork   boolean NOT NULL DEFAULT false,  -- V2: conservative default for ambiguous items
-    -- Dietary metadata derived at ingest. Specific allergen flags can extend here
-    -- if needed; V3-FB-01 keeps the controlled vocabulary in dietary_tags + junction.
-    is_vegetarian   boolean NOT NULL DEFAULT false,
-    is_vegan        boolean NOT NULL DEFAULT false,
-    is_halal        boolean NOT NULL DEFAULT false,
-    is_gluten_free  boolean NOT NULL DEFAULT false,
+    contains_pork    boolean NOT NULL DEFAULT false,
+    is_vegetarian    boolean NOT NULL DEFAULT false,
+    is_vegan         boolean NOT NULL DEFAULT false,
+    is_halal         boolean NOT NULL DEFAULT false,
+    is_gluten_free   boolean NOT NULL DEFAULT false,
     contains_seafood boolean NOT NULL DEFAULT false,
-    contains_nuts   boolean NOT NULL DEFAULT false,
-    contains_dairy  boolean NOT NULL DEFAULT false,
+    contains_nuts    boolean NOT NULL DEFAULT false,
+    contains_dairy   boolean NOT NULL DEFAULT false,
     active          boolean NOT NULL DEFAULT true,  -- V2: caterers retire items occasionally
     created_at      timestamptz NOT NULL DEFAULT now(),
     updated_at      timestamptz NOT NULL DEFAULT now()
 );
 
-COMMENT ON TABLE  menu_items IS 'Per-caterer menu. Prices overwrite in place (V3-OC-01).';
+COMMENT ON TABLE  menu_items IS 'Per-caterer menu. Prices overwrite in place (V3-OC-01). Dietary properties stored as boolean columns on this table.';
 COMMENT ON COLUMN menu_items.price_cents IS 'V3-OC-01: current price. No effective-date history; the order row''s stored total preserves what was paid.';
 
 
@@ -228,17 +227,18 @@ CREATE TABLE dietary_tags (
 
 COMMENT ON TABLE dietary_tags IS 'V3-FB-01: controlled vocabulary for dietary restrictions. Extensible by operator. No severity field per V3-AI-01 — every tag treated as safety-critical.';
 
--- Seed the dietary tags the operator can pick from at enrolment.
+-- Seed the dietary tags used by student enrolments to record dietary requirements.
+-- A tag on an enrolment means "this student requires this property."
 INSERT INTO dietary_tags (name, label, description) VALUES
     ('no_pork',         'No pork',         'Kid does not eat pork'),
-    ('no_seafood',      'No seafood',      'Kid does not eat seafood/shellfish'),
-    ('no_nuts',         'No nuts',         'Kid does not eat nuts (severity unmodelled — treat as allergy)'),
-    ('no_dairy',        'No dairy',        'Kid does not eat dairy'),
-    ('halal',           'Halal',           'Kid eats only halal meals'),
-    ('vegetarian',      'Vegetarian',      'Kid does not eat meat'),
-    ('vegan',           'Vegan',           'Kid eats no animal products'),
-    ('gluten_free',     'Gluten free',     'Kid does not eat gluten'),
-    ('mild_only',       'Mild only',       'Kid does not eat spicy food');
+    ('no_seafood',      'No seafood',       'Kid does not eat seafood or shellfish'),
+    ('no_nuts',         'No nuts',          'Kid has nut allergy or does not eat nuts'),
+    ('no_dairy',        'No dairy',         'Kid does not eat dairy'),
+    ('halal',           'Halal',            'Kid eats only halal meals'),
+    ('vegetarian',      'Vegetarian',       'Kid is vegetarian'),
+    ('vegan',           'Vegan',            'Kid is vegan'),
+    ('gluten_free',     'Gluten free',      'Kid requires gluten-free meals'),
+    ('mild_only',       'Mild only',        'Kid eats mild food only');
 
 
 -- =============================================================================
@@ -272,6 +272,10 @@ CREATE TABLE enrolments (
     -- Catering opt-out per V3-PV-01 (default-opted-in carried from V2)
     opted_out_of_catering       boolean NOT NULL DEFAULT false,
 
+    -- Free-text allergy note for restrictions outside the structured dietary_tags vocabulary.
+    -- Non-null at term-start email time triggers an operator escalation.
+    other_allergy_notes         text,
+
     created_at                  timestamptz NOT NULL DEFAULT now(),
     updated_at                  timestamptz NOT NULL DEFAULT now()
 );
@@ -281,6 +285,7 @@ COMMENT ON COLUMN enrolments.original_start_date IS 'V3-EL-01: never changes aft
 COMMENT ON COLUMN enrolments.current_period_start_date IS 'V3-EL-01: updated when a kid returns after a departure.';
 COMMENT ON COLUMN enrolments.current_period_end_date IS 'V3-EL-01: null while active. Set when kid leaves. Active state = (end_date IS NULL OR end_date > date_of_interest).';
 COMMENT ON COLUMN enrolments.opted_out_of_catering IS 'V3-PV-01: parent-controlled flag. Default false (catering on). Tutor-led opt-back-in via V3-MP-01 checkbox.';
+COMMENT ON COLUMN enrolments.other_allergy_notes IS 'Free-text allergy/restriction entered by parent that does not fit any structured dietary_tag. Non-null triggers an operator escalation at term-start email processing.';
 
 -- ---------------------------------------------------------------------------
 -- enrolment_dietary_tags — junction (V3-FB-01).
@@ -294,6 +299,7 @@ CREATE TABLE enrolment_dietary_tags (
 );
 
 COMMENT ON TABLE enrolment_dietary_tags IS 'V3-FB-01: junction between enrolments and dietary_tags. One row per (enrolment, tag).';
+
 
 
 -- =============================================================================
@@ -502,10 +508,14 @@ CREATE TABLE feedback (
     comment                 text,
 
     -- Manager-only fields (null for tutor submissions)
-    food_on_time            boolean,
-    visibly_wrong           boolean,
-    meals_left              integer,
-    kids_who_didnt_eat      text,                                              -- free-text names
+    -- Checklist: five boolean questions covering the session delivery quality.
+    food_on_time                boolean,                                           -- arrived on time?
+    correct_count_received      boolean,                                           -- correct number of meals?
+    correct_dietary_delivered   boolean,                                           -- dietary meals correct?
+    food_temperature_ok         boolean,                                           -- food at right temperature?
+    visibly_wrong               boolean,                                           -- packaging intact / nothing wrong?
+    meals_left                  integer,
+    kids_who_didnt_eat          text,                                              -- free-text names
 
     submitted_at            timestamptz NOT NULL DEFAULT now(),
 
@@ -516,6 +526,9 @@ CREATE TABLE feedback (
 
 COMMENT ON TABLE feedback IS 'V3-FB-01: polymorphic feedback. Tutor source attaches to order_line for per-kid scoring. Manager source attaches to order for session-level scoring + checklist + meals-left + names. Null rating = ''did not fill in'' and does not feed the rolling mean.';
 COMMENT ON COLUMN feedback.rating IS 'V3-FB-01: 1-5 enum constrained at this DB layer (enforced 1-5). Null when rater didn''t fill in — not folded into rolling mean.';
+COMMENT ON COLUMN feedback.correct_count_received IS 'Manager checklist: did the caterer deliver the correct number of meals?';
+COMMENT ON COLUMN feedback.correct_dietary_delivered IS 'Manager checklist: were the correct dietary-safe meals present for all restricted students?';
+COMMENT ON COLUMN feedback.food_temperature_ok IS 'Manager checklist: was the food delivered at an appropriate temperature (hot food hot)?';
 
 -- ---------------------------------------------------------------------------
 -- opt_back_in_requests — V3-MP-01: tutor checkbox tick history.

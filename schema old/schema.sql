@@ -1,8 +1,0 @@
--- schema/schema.sql
--- Database schema for the Padea Operations Agent
---
--- Status: NOT YET DEFINED
--- This file is a placeholder. Schema will be designed once data sources
--- and requirements are fully understood.
---
--- When ready, document design choices in docs/schema_notes.md

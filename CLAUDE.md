@@ -14,7 +14,7 @@ An AI agent (Claude Sonnet 4.6) that runs the end-to-end catering workflow for P
 
 **This is a competition submission.** Judges see a live demo: real Supabase Postgres database, real Gmail emails. Quality of the demo matters.
 
-**Design version: V3 is final.** Do not propose re-designing schema or architecture. Build it.
+**Design version: V4 is final.** Do not propose re-designing schema or architecture. Build it.
 
 ---
 
@@ -22,8 +22,9 @@ An AI agent (Claude Sonnet 4.6) that runs the end-to-end catering workflow for P
 
 | File | What it is |
 |---|---|
-| `docs/v3_final/Schema/v3_schema.sql` | Authoritative DB schema — run this in Supabase, don't modify |
-| `docs/v3_final/v3_summary.md` | Plain-English system description |
+| `docs/v4_optimised/Schema/v4_schema.sql` | Authoritative DB schema — run this in Supabase, don't modify |
+| `docs/v4_optimised/v4_summary.md` | Plain-English system description |
+| `docs/v3_reinstatements/` | V3 base schema — historical record, do not build from |
 | `agent_context/system_prompt.md` | System prompt the Padea agent gets at each run |
 | `agent_context/tools_reference.md` | Tool catalog + build spec for `src/tools/` |
 | `agent_context/runtime_config.yaml` | All configurable thresholds |
@@ -59,27 +60,32 @@ An AI agent (Claude Sonnet 4.6) that runs the end-to-end catering workflow for P
 
 - **Be direct** — short answers where possible, detailed only when the detail matters
 - **Ask before assuming** on anything structural — if adding a new table or changing the schema feels needed, ask first
-- **Write the session summary** at the end of each conversation to `chat_history/YYYY-MM-DD_NNN.md` — cover: what was decided, what was built, key decisions with brief reasoning, where to pick up next session
+- **Auto-save session context** — at the end of every conversation, always write a session summary to `chat_history/YYYY-MM-DD_NNN.md` without being asked. Increment the NNN counter from the last file in that folder. Cover: what was decided, what was built, key decisions with brief reasoning, where to pick up next session. Do this even if the conversation is short.
+- **Update build status** — after writing the summary, update the Build status block in this file to reflect what just completed and set the `▶ Next session start here:` pointer.
 - **Update this CLAUDE.md** whenever a new preference or convention is discovered that should persist — that's the point of this file
 
 ---
 
 ## Build status (updated each session)
 
-**Last updated: 2026-05-27 (Session 002)**
+**Last updated: 2026-05-28 (Session 005 — V4 schema deployed, docs restructured)**
 
-> **▶ Next session start here:** Write ingest scripts to seed real Padea data — populate `schools`, `caterers`, `students`, and `upcoming_sessions` from source files in `data/source/` (`.xlsx` + `.pdf`). That's Phase 2.
+> **▶ Next session start here:** Phase 2 — source data ingest. Read `chat_history/2026-05-28_003.md` for full context. **Before writing any ingest scripts**, collect raw Padea data into `data/raw/` (schools, caterers, tutors, enrolments, session_slots, menu_items — spreadsheets, PDFs, or typed stubs). Then write `src/ingest/` scripts to seed the V4 tables. Schema changes are still free (tables are empty).
 
-- ✅ V3 design locked, V4/V5 cancelled
+- ✅ V4 design locked (V3 base → optimisations applied → V4 final)
+- ✅ `docs/v4_optimised/Schema/v4_schema.sql` — **authoritative schema**, deployed to Supabase (triggers, enums, denorm `caterer_id`, GST snapshot). Do not modify without asking.
+- ✅ `docs/v4_optimised/v4_summary.md` — V4 plain-English description
+- ✅ `docs/v3_reinstatements/` — V3 base schema preserved as historical record (renamed from `docs/v3_final/`). Do not build from these.
 - ✅ `agent_context/` folder fully populated
 - ✅ `config/settings.py` + `requirements.txt` implemented, deps installed in `.venv`
 - ✅ Chat history system + Stop hook
 - ✅ Supabase project created (`padea-ops-agent`, `ap-southeast-1`, IPv4 via Session pooler)
-- ✅ V3 schema deployed and verified — `schools` table queryable, returns 0 rows as expected
+- ✅ V4 schema deployed and verified — smoke test passes, PostgreSQL 17.6
 - ✅ `.env` configured with `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_SECRET_KEY` (gitignored)
-- ✅ `scripts/test_db_connection.py` — smoke test passes end-to-end (PostgreSQL 17.6)
-- ✅ `requirements.txt` updated: `psycopg[binary]>=3.1.0` (psycopg v3, replaces psycopg2)
-- ❌ Source data not ingested (`data/source/*.xlsx`, `*.pdf`) ← **Phase 2**
+- ✅ `scripts/test_db_connection.py` — smoke test passes end-to-end
+- ✅ `requirements.txt` updated: `psycopg[binary]>=3.1.0` (psycopg v3)
+- ❌ `data/raw/` — source data not yet collected ← **Phase 2 prerequisite**
+- ❌ `src/ingest/` — seed scripts not written ← **Phase 2**
 - ❌ `src/tools/` — all stubs
 - ❌ `src/agent/loop.py` — stub
 - ❌ Gmail API credentials not obtained

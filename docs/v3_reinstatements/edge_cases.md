@@ -119,6 +119,10 @@ Each entry below is a deliberate non-feature. Listed with the reason and the V4 
 
 **Mass simultaneous absence (large group of kids absent for the same reason — e.g. school excursion).** Already covered by full-session or partial exclusion mechanism (V3-EL-01). If it's expected, operator marks it as an exclusion at term start. If it's unexpected, individual absence emails arrive normally.
 
+### Enrolment lifecycle
+
+**Student who departs and returns more than once (repeat period cycles).** The V3 schema's three-date model (`original_start_date`, `current_period_start_date`, `current_period_end_date`) handles a single departure and return correctly. A student who departs and returns a second time overwrites the second `current_period_start_date` with the third — the middle period's start date is lost as structured data. The agent_steps audit trail preserves every operator update, so the history is recoverable, but it is not directly queryable from the enrolments table. *Out of scope for V3 — rare at Padea's current scale.* *V4 trigger:* add an `enrolment_periods` table storing each (start_date, end_date) pair per enrolment if multiple returns become a routine operational case.
+
 ### Identity and attendance
 
 **Cross-school student identity resolution.** Out of scope. No kid in Padea's data attends multiple schools. If such a case emerged, operator manually notes the connection; system treats them as two unrelated enrolments. Documented in V3-IL-01. *V4 trigger:* real cross-school case emerges.
@@ -183,6 +187,7 @@ Each entry below is a deliberate non-feature. Listed with the reason and the V4 
 | Daylight saving transitions | Out of scope | Logic absorbs timing drift |
 | Multi-time-zone operation | Out of scope | Single time zone in V3 |
 | Zero-cohort session | Out of scope | Vanishingly rare |
+| Student departs + returns multiple times | Out of scope | V4 — add enrolment_periods table |
 | Cross-school identity | Out of scope | V4 if real case emerges |
 | Attendance system integration | Out of scope | V4 if needed |
 | Silent no-show | Out of scope | Manager catches it after the fact |
