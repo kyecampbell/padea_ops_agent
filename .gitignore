@@ -44,6 +44,9 @@ emails/outgoing/drafts/
 # ── DB backups (pg_dump contains real student PII — never commit) ─────────────
 backups/
 
+# ── Office lock/temp files ────────────────────────────────────────────────────
+~$*
+
 # ── Claude Code project settings ─────────────────────────────────────────────
 # .claude/settings.json is committed (has Stop hook for chat history).
 # Only ignore the local overrides file.

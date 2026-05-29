@@ -260,8 +260,9 @@ def compose_weekly_summary_email(caterer_id: int, summary: dict) -> str:
     early-return {"already_completed": True} form).
 
     Body sections: week header, per-session breakdown, cost block (meals +
-    delivery + GST + TOTAL DUE), MOQ floor note if applied, quality ratings,
-    sustained-decline alert if triggered.
+    delivery + GST + TOTAL DUE), MOQ floor note if applied. This is a PAYMENT
+    DOCUMENT ONLY — no quality ratings, no decline alert, no "warning queued"
+    text ever reaches the caterer (that is operator-facing decision-log content).
 
     Demo mode: prepends [DEMO — Intended for: {caterer_email}] when
     settings.email_mode == 'demo'.
@@ -281,9 +282,6 @@ def compose_weekly_summary_email(caterer_id: int, summary: dict) -> str:
     moq_floor_applied: bool  = summary["moq_floor_applied"]
     moq_variance_cents: int  = summary["moq_variance_cents"]
     moq_applicable: int | None = summary["moq_applicable"]
-    mean_4w: float | None  = summary["mean_4w"]
-    mean_12w: float | None = summary["mean_12w"]
-    sustained_decline: bool = summary["sustained_decline"]
     session_breakdown: list[dict] = summary["session_breakdown"]
 
     week_range = (
@@ -326,24 +324,10 @@ def compose_weekly_summary_email(caterer_id: int, summary: dict) -> str:
             f"Variance of {_fmt_money(moq_variance_cents)} added to final session invoice.\n"
         )
 
-    # Quality block
-    q4_str  = f"{mean_4w:.1f} / 5.0"  if mean_4w  is not None else "insufficient data"
-    q12_str = f"{mean_12w:.1f} / 5.0" if mean_12w is not None else "insufficient data"
-    quality_block = (
-        f"Quality (4-week mean):  {q4_str}\n"
-        f"Quality (12-week mean): {q12_str}"
-    )
-
-    # Sustained decline alert
-    decline_alert = ""
-    if sustained_decline and mean_4w is not None and mean_12w is not None:
-        drop = mean_12w - mean_4w
-        decline_alert = (
-            f"\n⚠ QUALITY DECLINE: 4-week mean ({mean_4w:.1f}) is below floor "
-            f"({settings.quality_floor:.1f}) and down {drop:.1f} from 12-week baseline "
-            f"({mean_12w:.1f}). A warning email has been queued for manager approval.\n"
-        )
-
+    # Payment document ONLY. Quality ratings, sustained-decline detection, and the
+    # "warning queued" fact are operator-facing — they live in the agent_steps
+    # decision log, never in the caterer's email. The caterer hears about quality
+    # solely via the warning email, and only once the operator approves and sends it.
     body = (
         f"WEEKLY SUMMARY: {caterer_name} — {week_range}\n"
         f"\n"
@@ -352,9 +336,6 @@ def compose_weekly_summary_email(caterer_id: int, summary: dict) -> str:
         f"\n"
         f"{cost_block}\n"
         f"{moq_note}"
-        f"\n"
-        f"{quality_block}\n"
-        f"{decline_alert}"
     )
 
     if settings.email_mode == "demo":

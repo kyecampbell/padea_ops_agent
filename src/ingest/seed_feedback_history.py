@@ -91,6 +91,37 @@ SLOT_RATING_OVERRIDE: dict[int, list[int]] = {
     4: [5, 4, 4, 4, 3],   # MacGregor (school 3) — healthy, ends just at the floor
 }
 
+# Per-session STUDENT (tutor) ratings for the Terrific demo schools, one list of
+# n=6 student scores per week (week_index 0–4). These hang off order_lines as
+# source='tutor' feedback so the per-school satisfaction chart shows real decimal
+# student averages, not just the single manager integer. JPC's list is applied to
+# BOTH its slots (2 and 3) so the JPC school mean equals the list mean.
+#   JPC weekly means : 4.83, 4.83, 3.17, 2.00, 1.17  — collapse below the 3.0 floor
+#   MacGregor means  : 4.67, 4.33, 3.67, 3.83, 3.17  — healthier, never below floor
+# The caterer-level pooled (manager + tutor) rolling mean still trips the
+# sustained-decline trigger as_of 2026-06-01 15:30 AEST:
+#   4-week  = 163/63 = 2.59 (< 3.0)   12-week = 362/105 = 3.45   drop = 0.86 (≥ 0.5)
+_JPC_STUDENT = [
+    [5, 5, 5, 4, 5, 5],   # W1 mean 4.83
+    [5, 5, 5, 5, 4, 5],   # W2 mean 4.83
+    [3, 4, 3, 3, 2, 4],   # W3 mean 3.17
+    [1, 2, 2, 3, 2, 2],   # W4 mean 2.00
+    [1, 1, 2, 1, 1, 1],   # W5 mean 1.17
+]
+_MACG_STUDENT = [
+    [5, 5, 4, 5, 5, 4],   # W1 mean 4.67
+    [4, 4, 5, 4, 4, 5],   # W2 mean 4.33
+    [4, 3, 4, 4, 4, 3],   # W3 mean 3.67
+    [4, 4, 3, 4, 4, 4],   # W4 mean 3.83
+    [3, 4, 3, 3, 3, 3],   # W5 mean 3.17
+]
+SLOT_STUDENT_RATINGS: dict[int, list[list[int]]] = {
+    2: _JPC_STUDENT,   # JPC Tue
+    3: _JPC_STUDENT,   # JPC Wed (same list → JPC school mean = list mean)
+    4: _MACG_STUDENT,  # MacGregor Thu
+}
+STUDENT_LINES_PER_SESSION = 6  # n students rated per session
+
 # Manager comments for notable sessions, keyed by (caterer_id, week_index).
 # These describe the Terrific decline and apply only to the collapsing JPC slots;
 # slots in SLOT_RATING_OVERRIDE (the healthy MacGregor session) get no comment so
@@ -115,12 +146,37 @@ def _feedback_time(session_date: datetime.date) -> datetime.datetime:
     )
 
 
+def _slot_enrolment_ids(cur, slot_id: int, limit: int) -> list[int]:
+    """First `limit` enrolment ids attached to this session slot (stable order)."""
+    cur.execute(
+        """
+        SELECT e.id
+        FROM enrolment_session_slots ess
+        JOIN enrolments e ON e.id = ess.enrolment_id
+        WHERE ess.session_slot_id = %s
+        ORDER BY e.id
+        LIMIT %s
+        """,
+        (slot_id, limit),
+    )
+    return [r[0] for r in cur.fetchall()]
+
+
+def _terrific_menu_ids(cur) -> list[int]:
+    cur.execute("SELECT id FROM menu_items WHERE caterer_id = 2 ORDER BY id")
+    return [r[0] for r in cur.fetchall()]
+
+
 def run() -> None:
     order_count = 0
     feedback_count = 0
+    order_line_count = 0
+    tutor_feedback_count = 0
 
     with get_conn() as conn:
         with conn.cursor() as cur:
+            terrific_menu = _terrific_menu_ids(cur)
+
             for week_idx, week_start in enumerate(WEEK_STARTS):
                 for slot_id, info in SLOT_INFO.items():
                     caterer_id  = info["caterer_id"]
@@ -136,74 +192,130 @@ def run() -> None:
 
                     total_cost = students * CATERER_PRICE[caterer_id] + CATERER_DELIVERY[caterer_id]
 
-                    # Guard: skip if order already exists (idempotent re-run)
+                    # Order: reuse if it already exists (idempotent re-run), else insert.
                     cur.execute(
                         "SELECT id FROM orders WHERE session_slot_id = %s AND session_date = %s",
                         (slot_id, session_date),
                     )
-                    if cur.fetchone():
-                        continue
-
-                    cur.execute(
-                        """
-                        INSERT INTO orders (
-                            session_slot_id, caterer_id, session_date,
-                            total_items, total_cost_cents, gst_rate_percent,
-                            moq_floor_applied, moq_variance_cents,
-                            composed_at, sent_at, is_preview_week, rotation_status
-                        ) VALUES (
-                            %s, %s, %s,
-                            %s, %s, 10.00,
-                            false, 0,
-                            %s, %s, false, 'normal'
+                    existing = cur.fetchone()
+                    if existing:
+                        order_id = existing[0]
+                    else:
+                        cur.execute(
+                            """
+                            INSERT INTO orders (
+                                session_slot_id, caterer_id, session_date,
+                                total_items, total_cost_cents, gst_rate_percent,
+                                moq_floor_applied, moq_variance_cents,
+                                composed_at, sent_at, is_preview_week, rotation_status
+                            ) VALUES (
+                                %s, %s, %s,
+                                %s, %s, 10.00,
+                                false, 0,
+                                %s, %s, false, 'normal'
+                            )
+                            RETURNING id
+                            """,
+                            (
+                                slot_id, caterer_id, session_date,
+                                students, total_cost,
+                                composed_at,
+                                composed_at + datetime.timedelta(minutes=2),
+                            ),
                         )
-                        RETURNING id
-                        """,
-                        (
-                            slot_id, caterer_id, session_date,
-                            students, total_cost,
-                            composed_at,
-                            composed_at + datetime.timedelta(minutes=2),
-                        ),
-                    )
-                    order_id = cur.fetchone()[0]
-                    order_count += 1
+                        order_id = cur.fetchone()[0]
+                        order_count += 1
+
+                    submitted_at = _feedback_time(session_date)
 
                     # Manager feedback (source='manager' requires order_id, no order_line_id)
                     # Per-slot override (e.g. MacGregor) wins over the per-caterer trend.
-                    if slot_id in SLOT_RATING_OVERRIDE:
-                        rating = SLOT_RATING_OVERRIDE[slot_id][week_idx]
-                        comment = None  # healthy session — no decline-narrative comment
-                    else:
-                        rating = RATINGS[caterer_id][week_idx]
-                        comment = COMMENTS.get((caterer_id, week_idx), {}).get("manager")
+                    # Guard: skip if a manager row already exists for this order.
                     cur.execute(
-                        """
-                        INSERT INTO feedback (
-                            source, order_id, tutor_id, caterer_id, rating, comment,
-                            food_on_time, correct_count_received, correct_dietary_delivered,
-                            food_temperature_ok, visibly_wrong, submitted_at
-                        ) VALUES (
-                            'manager', %s, %s, %s, %s, %s,
-                            %s, %s, %s, %s, %s, %s
-                        )
-                        """,
-                        (
-                            order_id, tutor_id, caterer_id, rating, comment,
-                            rating >= 3,   # food_on_time
-                            rating >= 3,   # correct_count_received
-                            rating >= 4,   # correct_dietary_delivered
-                            rating >= 3,   # food_temperature_ok
-                            rating <= 2,   # visibly_wrong
-                            _feedback_time(session_date),
-                        ),
+                        "SELECT 1 FROM feedback WHERE order_id = %s AND source = 'manager'",
+                        (order_id,),
                     )
-                    feedback_count += 1
+                    if not cur.fetchone():
+                        if slot_id in SLOT_RATING_OVERRIDE:
+                            rating = SLOT_RATING_OVERRIDE[slot_id][week_idx]
+                            comment = None  # healthy session — no decline-narrative comment
+                        else:
+                            rating = RATINGS[caterer_id][week_idx]
+                            comment = COMMENTS.get((caterer_id, week_idx), {}).get("manager")
+                        cur.execute(
+                            """
+                            INSERT INTO feedback (
+                                source, order_id, tutor_id, caterer_id, rating, comment,
+                                food_on_time, correct_count_received, correct_dietary_delivered,
+                                food_temperature_ok, visibly_wrong, submitted_at
+                            ) VALUES (
+                                'manager', %s, %s, %s, %s, %s,
+                                %s, %s, %s, %s, %s, %s
+                            )
+                            """,
+                            (
+                                order_id, tutor_id, caterer_id, rating, comment,
+                                rating >= 3,   # food_on_time
+                                rating >= 3,   # correct_count_received
+                                rating >= 4,   # correct_dietary_delivered
+                                rating >= 3,   # food_temperature_ok
+                                rating <= 2,   # visibly_wrong
+                                submitted_at,
+                            ),
+                        )
+                        feedback_count += 1
+
+                    # Student (tutor) feedback for the Terrific demo schools: 6 order_lines
+                    # per session, each carrying one tutor rating submitted the same night.
+                    # Guard: skip if order_lines already exist for this order.
+                    if slot_id in SLOT_STUDENT_RATINGS:
+                        cur.execute(
+                            "SELECT 1 FROM order_lines WHERE order_id = %s LIMIT 1",
+                            (order_id,),
+                        )
+                        if not cur.fetchone():
+                            student_scores = SLOT_STUDENT_RATINGS[slot_id][week_idx]
+                            enrolment_ids = _slot_enrolment_ids(
+                                cur, slot_id, STUDENT_LINES_PER_SESSION
+                            )
+                            for i, (enr_id, score) in enumerate(
+                                zip(enrolment_ids, student_scores)
+                            ):
+                                menu_item_id = terrific_menu[i % len(terrific_menu)]
+                                cur.execute(
+                                    """
+                                    INSERT INTO order_lines (
+                                        order_id, enrolment_id, menu_item_id, source
+                                    ) VALUES (%s, %s, %s, 'rotation')
+                                    RETURNING id
+                                    """,
+                                    (order_id, enr_id, menu_item_id),
+                                )
+                                order_line_id = cur.fetchone()[0]
+                                order_line_count += 1
+
+                                cur.execute(
+                                    """
+                                    INSERT INTO feedback (
+                                        source, order_line_id, tutor_id, caterer_id,
+                                        rating, submitted_at
+                                    ) VALUES (
+                                        'tutor', %s, %s, %s, %s, %s
+                                    )
+                                    """,
+                                    (
+                                        order_line_id, tutor_id, caterer_id,
+                                        score, submitted_at,
+                                    ),
+                                )
+                                tutor_feedback_count += 1
 
             conn.commit()
 
-    print(f"orders (historical):  {order_count} rows  (5 weeks × 11 slots)")
-    print(f"feedback:             {feedback_count} rows  (1 manager rating per session)")
+    print(f"orders (historical):     {order_count} new rows")
+    print(f"manager feedback:        {feedback_count} new rows")
+    print(f"order_lines (student):   {order_line_count} new rows")
+    print(f"tutor feedback:          {tutor_feedback_count} new rows")
     print()
     print("Terrific Noodles manager rating trajectory:")
     for i, wk in enumerate(WEEK_STARTS):
