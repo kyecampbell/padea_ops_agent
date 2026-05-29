@@ -685,7 +685,6 @@ TOOL_SCHEMAS: list[dict] = [
                 },
                 "related_order_id":   {"type": "integer", "description": "FK to the related order, if any."},
                 "related_caterer_id": {"type": "integer", "description": "FK to the related caterer, if any."},
-                "related_run_id":     {"type": "integer", "description": "FK to the agent_run, if any."},
                 "related_step_id":    {"type": "integer", "description": "FK to the agent_step, if any."},
             },
             "required": ["to", "subject", "body", "email_type"],
@@ -713,12 +712,11 @@ TOOL_SCHEMAS: list[dict] = [
                 "to": {"type": "string", "description": "Intended recipient email address."},
                 "subject": {"type": "string", "description": "Email subject line."},
                 "body": {"type": "string", "description": "Full email body text."},
-                "related_run_id":     {"type": "integer", "description": "FK to the agent_run."},
                 "related_step_id":    {"type": "integer", "description": "FK to the agent_step, if any."},
                 "related_order_id":   {"type": "integer", "description": "FK to the related order, if any."},
                 "related_caterer_id": {"type": "integer", "description": "FK to the related caterer, if any."},
             },
-            "required": ["email_type", "to", "subject", "body", "related_run_id"],
+            "required": ["email_type", "to", "subject", "body"],
         },
     },
 
@@ -948,6 +946,13 @@ def dispatch(
     # (compute_rolling_mean) handle None internally; no injection needed.
     if tool_name == "get_sessions_needing_orders" and "as_of" not in coerced:
         coerced["as_of"] = datetime.now(tz=BRISBANE)
+
+    # The loop owns run_id; the model never sees it (not in the system prompt or
+    # the trigger message). Inject it for the email tools so related_run_id is
+    # always the correct FK — never model-guessed, omitted, or hard-failed. This
+    # overwrites any model-supplied value, so it is authoritative.
+    if tool_name in ("gmail_send", "queue_email_for_approval"):
+        coerced["related_run_id"] = run_id
 
     # ── call ──────────────────────────────────────────────────────────────────
     try:
