@@ -129,7 +129,10 @@ Call `add_note(label="weekly_summary_complete", body="Weekly summary run complet
 
 ## Inbound email processing
 
-After `gmail_poll_inbox`, handle each new message:
+After `gmail_poll_inbox`, handle each returned message in turn:
+
+- Call `classify_inbound_email(gmail_message_id, from_address, subject, body, received_at)` — this routes the message into exactly one of the five labels below and writes the `inbound_email_records` dedup row. Classification is a fast routing step; you do all downstream reasoning and escalation yourself based on the label it returns.
+- Then act on the returned label using the handler for that label below. Routine confirmations log an informational step; a `caterer_price_change_notification` is **notable**; an `unclassified` message is **urgent** (the operator reads it directly).
 
 **`absence`**
 - Parse enrolment and session_date from the email.

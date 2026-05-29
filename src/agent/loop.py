@@ -4,9 +4,9 @@ src/agent/loop.py
 Claude tool-calling agent loop for the Padea Operations Agent.
 
 Responsibilities:
-  - TOOL_SCHEMAS:  25 JSON schemas exposed to the Claude API.
-  - TOOL_REGISTRY: tool name → Python callable (24 entries; add_note excluded).
-  - _PARAM_TYPES:  coercion map for date/datetime parameters (14 entries).
+  - TOOL_SCHEMAS:  27 JSON schemas exposed to the Claude API.
+  - TOOL_REGISTRY: tool name → Python callable (26 entries; add_note excluded).
+  - _PARAM_TYPES:  coercion map for date/datetime parameters (15 entries).
   - _serialise():  recursive JSON-safe serialiser.
   - dispatch():    coerce → call → serialise → return (result, is_error).
   - run():         full agent loop (STEP 3 — not yet implemented).
@@ -49,6 +49,7 @@ from src.tools.quality import get_feedback_for_session, compute_rolling_mean, ge
 from src.tools.caterers import caterers_within_range, project_weekly_cost, check_weekly_moq
 from src.tools.weekly_summary import generate_weekly_summary, compose_weekly_summary_email
 from src.tools.gmail import gmail_send, queue_email_for_approval
+from src.tools.inbound import gmail_poll_inbox, classify_inbound_email
 
 BRISBANE = ZoneInfo("Australia/Brisbane")
 
@@ -64,7 +65,7 @@ def _load_system_prompt() -> str:
 
 
 # =============================================================================
-# TOOL SCHEMAS — 25 JSON schemas exposed to the Claude API
+# TOOL SCHEMAS — 27 JSON schemas exposed to the Claude API
 # =============================================================================
 
 TOOL_SCHEMAS: list[dict] = [
@@ -720,6 +721,57 @@ TOOL_SCHEMAS: list[dict] = [
         },
     },
 
+    # ── INBOUND EMAIL ─────────────────────────────────────────────────────────
+
+    {
+        "name": "gmail_poll_inbox",
+        "description": (
+            "Read UNREAD messages from the Padea Gmail inbox and return only those "
+            "not yet recorded in inbound_email_records (deduped by gmail_message_id, "
+            "so re-polling never double-processes). Returns a list of "
+            "{gmail_message_id, from_address, subject, received_at, body}. "
+            "Optionally pass since_last_run_timestamp (ISO) to only fetch messages "
+            "received after that time. Call this at the start of every run."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "since_last_run_timestamp": {
+                    "type": "string",
+                    "description": (
+                        "Optional ISO datetime. Only return messages received after "
+                        "this time. Dedup still applies regardless."
+                    ),
+                },
+            },
+            "required": [],
+        },
+    },
+
+    {
+        "name": "classify_inbound_email",
+        "description": (
+            "Classify ONE inbound message into exactly one inbound type: 'absence', "
+            "'caterer_order_confirmation', 'caterer_price_change_notification', "
+            "'parent_enrolment_response', or 'unclassified'. Also writes the "
+            "inbound_email_records dedup row. Pass the fields returned by "
+            "gmail_poll_inbox for this message. Returns "
+            "{gmail_message_id, classification}. After classifying, route the "
+            "message per the Inbound email processing section."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "gmail_message_id": {"type": "string", "description": "The Gmail message id from gmail_poll_inbox."},
+                "from_address":     {"type": "string", "description": "Sender address from gmail_poll_inbox."},
+                "subject":          {"type": "string", "description": "Subject from gmail_poll_inbox."},
+                "body":             {"type": "string", "description": "Body text from gmail_poll_inbox."},
+                "received_at":      {"type": "string", "description": "ISO datetime the message was received (from gmail_poll_inbox)."},
+            },
+            "required": ["gmail_message_id", "from_address", "subject", "body", "received_at"],
+        },
+    },
+
     # ── META-TOOL ─────────────────────────────────────────────────────────────
 
     {
@@ -764,7 +816,7 @@ TOOL_SCHEMAS: list[dict] = [
 
 
 # =============================================================================
-# TOOL REGISTRY — name → Python callable (24 entries; add_note excluded)
+# TOOL REGISTRY — name → Python callable (26 entries; add_note excluded)
 # =============================================================================
 # add_note is NOT registered here. dispatch() special-cases it before the
 # registry lookup and logs via log_agent_step directly.
@@ -794,11 +846,13 @@ TOOL_REGISTRY: dict[str, Any] = {
     "compose_weekly_summary_email": compose_weekly_summary_email,
     "gmail_send":                  gmail_send,
     "queue_email_for_approval":    queue_email_for_approval,
+    "gmail_poll_inbox":            gmail_poll_inbox,
+    "classify_inbound_email":      classify_inbound_email,
 }
 
 
 # =============================================================================
-# PARAMETER TYPE COERCION MAP — 14 entries
+# PARAMETER TYPE COERCION MAP — 15 entries
 # date/datetime params arrive from the Claude API as JSON strings and must be
 # coerced before calling the real Python functions.
 #
@@ -840,6 +894,9 @@ _PARAM_TYPES: dict[tuple[str, str], type] = {
     # Monday consolidated summary
     ("generate_weekly_summary",     "week_of"):         date,
     ("generate_weekly_summary",     "as_of"):           datetime,
+
+    # Inbound email
+    ("classify_inbound_email",      "received_at"):     datetime,
 }
 
 

@@ -99,12 +99,22 @@ class Settings(BaseSettings):
         "gmail_credentials_path", ".secrets/gmail_credentials.json"
     )
 
+    # The Gmail account the agent sends as and polls. Lives in .env (secret-ish:
+    # identifies the production inbox). Demo mode rewrites SEND targets to
+    # demo_email_address but never changes which account we authenticate as.
+    gmail_address: str = Field(default=os.getenv("GMAIL_ADDRESS", ""))
+
     # -----------------------------------------------------------------------
     # Agent loop
     # -----------------------------------------------------------------------
     max_tool_calls_per_run: int = _yaml.get("max_tool_calls_per_run", 15)
     agent_model: str = _yaml.get("agent_model", "claude-sonnet-4-6")
     crashed_run_staleness_minutes: int = _yaml.get("crashed_run_staleness_minutes", 30)
+
+    # Haiku is permitted in EXACTLY ONE place: classify_inbound_email (inbound
+    # routing). Every other model call uses agent_model (Sonnet). Referenced only
+    # in src/tools/inbound.py.
+    classifier_model: str = _yaml.get("classifier_model", "claude-haiku-4-5-20251001")
 
     # -----------------------------------------------------------------------
     # Caterer reach

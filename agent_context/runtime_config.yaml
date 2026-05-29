@@ -66,9 +66,12 @@ email_mode: "demo"
 # Must be a real inbox you can monitor during demo day.
 demo_email_address: "kyec898@gmail.com"
 
-# Gmail OAuth token path (relative to project root).
-gmail_token_path: ".secrets/gmail_token.json"
-gmail_credentials_path: ".secrets/gmail_credentials.json"
+# Gmail OAuth paths (relative to project root). Credentials are the Desktop-app
+# OAuth client downloaded from Google Cloud; the token is minted once by
+# scripts/gmail_auth.py (human-run browser consent) and refreshed automatically.
+# Both are gitignored.
+gmail_token_path: "config/gmail_token.json"
+gmail_credentials_path: "config/gmail_credentials.json"
 
 # =============================================================================
 # AGENT LOOP
@@ -82,6 +85,11 @@ max_tool_calls_per_run: 20
 
 # Claude model for the agent. Update when migrating model versions.
 agent_model: "claude-sonnet-4-6"
+
+# Model for inbound email classification ONLY (classify_inbound_email). Haiku is
+# permitted here and nowhere else — it just routes a message into one of five
+# inbound types; Sonnet (agent_model) does all downstream reasoning.
+classifier_model: "claude-haiku-4-5-20251001"
 
 # Agent runs marked 'running' for longer than this are reclassified as 'crashed'
 # by the next run's startup check.
