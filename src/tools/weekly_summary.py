@@ -20,7 +20,15 @@ _MONTH_ABBR = {
 _DAY_ABBR = {0: "Mon", 1: "Tue", 2: "Wed", 3: "Thu", 4: "Fri", 5: "Sat", 6: "Sun"}
 
 
-def _fmt_date(d: date) -> str:
+def _as_date(v: date | str) -> date:
+    # The summary dict round-trips through the model as a tool arg, so its date
+    # fields arrive back as ISO strings (the loop serialises date -> str). Accept
+    # either form so compose_weekly_summary_email is robust at that boundary.
+    return date.fromisoformat(v) if isinstance(v, str) else v
+
+
+def _fmt_date(d: date | str) -> str:
+    d = _as_date(d)
     return f"{_DAY_ABBR[d.weekday()]} {d.day} {_MONTH_ABBR[d.month]}"
 
 
@@ -260,8 +268,8 @@ def compose_weekly_summary_email(caterer_id: int, summary: dict) -> str:
 
     Read-only — no DB writes.
     """
-    week_start: date      = summary["week_start"]
-    week_end: date        = summary["week_end"]
+    week_start: date      = _as_date(summary["week_start"])
+    week_end: date        = _as_date(summary["week_end"])
     caterer_name: str     = summary["caterer_name"]
     caterer_email: str    = summary["caterer_email"]
     total_items: int      = summary["total_items"]
