@@ -40,9 +40,13 @@ def get_enrolments_for_session(session_slot_id: int, session_date: date) -> list
             school_id: int = row[0]
 
             # ── 2. Fetch exclusions covering session_date for this school ─────
+            # Scope is read from the structured year_levels_excluded column:
+            # an empty array means the whole school is closed; a non-empty array
+            # lists the excluded year levels. (Matches get_exclusions /
+            # get_year_level_exclusions — no text-parsing of reason.)
             cur.execute(
                 """
-                SELECT reason
+                SELECT year_levels_excluded
                 FROM exclusions
                 WHERE school_id = %s
                   AND enrolment_id IS NULL
@@ -51,16 +55,12 @@ def get_enrolments_for_session(session_slot_id: int, session_date: date) -> list
                 """,
                 (school_id, session_date, session_date),
             )
-            exclusion_reasons = [r[0] for r in cur.fetchall()]
+            exclusion_scopes = [r[0] for r in cur.fetchall()]
 
-            whole_school_excluded = any(
-                not _is_year_level_exclusion(r) for r in exclusion_reasons
-            )
+            whole_school_excluded = any(not scope for scope in exclusion_scopes)
             excluded_year_levels: set[int] = set()
-            for reason in exclusion_reasons:
-                yl = _extract_year_level(reason)
-                if yl is not None:
-                    excluded_year_levels.add(yl)
+            for scope in exclusion_scopes:
+                excluded_year_levels.update(scope or [])
 
             # ── 3. Fetch active cohort with dietary tags and absence flag ─────
             cur.execute(
@@ -126,6 +126,110 @@ def get_enrolments_for_session(session_slot_id: int, session_date: date) -> list
     return result
 
 
+def find_session_for_absence(
+    student_name: str,
+    session_date: date,
+    parent_email: str | None = None,
+) -> list[dict]:
+    """
+    Resolve an inbound absence email to the concrete enrolment + session it
+    refers to, and report whether that session's order has already gone out.
+
+    An absence email gives a student name and a date — not an enrolment_id. This
+    tool bridges that gap deterministically:
+      1. Match active enrolments by case-insensitive student_name (trimmed).
+         Active = current_period covers session_date and not opted out.
+      2. For each match, find the session_slot(s) the student attends
+         (left_date IS NULL) whose day_of_week equals session_date's weekday.
+      3. For each (enrolment, slot), report the order status for that date:
+         order_exists, order_id, and order_sent (a session_order email was sent
+         for that order).
+
+    parent_email, when supplied, is matched leniently: rows whose parent_email
+    equals it are preferred, but since the demo dataset shares one parent address
+    it is NOT used to exclude matches. Pass the raw From address; an embedded
+    "Name <addr>" form is handled.
+
+    The caller (agent) then ALWAYS records the absence via upsert_absence, and
+    skips any order amendment when order_exists is true — the caterer brief is
+    locked at T-72h (zero operational margin; walk-backs are an accepted gap).
+
+    Returns a list of candidate dicts (empty if no name/day match):
+        enrolment_id, student_name, parent_email, school_id, session_slot_id,
+        session_date, day_of_week, order_exists, order_id, order_sent
+    Multiple rows mean an ambiguous match — the agent should escalate.
+    """
+    weekday = session_date.isoweekday()  # 1=Mon .. 7=Sun, matches session_slots.day_of_week
+    email_addr = _extract_email_address(parent_email) if parent_email else None
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    e.id, e.student_name, e.parent_email,
+                    ss.school_id, ss.id, ss.day_of_week
+                FROM enrolments e
+                JOIN enrolment_session_slots ess
+                    ON ess.enrolment_id = e.id
+                   AND ess.left_date IS NULL
+                JOIN session_slots ss
+                    ON ss.id = ess.session_slot_id
+                   AND ss.active = true
+                   AND ss.day_of_week = %s
+                WHERE lower(btrim(e.student_name)) = lower(btrim(%s))
+                  AND e.opted_out_of_catering = false
+                  AND e.current_period_start_date <= %s
+                  AND (e.current_period_end_date IS NULL OR e.current_period_end_date > %s)
+                ORDER BY e.id, ss.id
+                """,
+                (weekday, student_name, session_date, session_date),
+            )
+            matches = cur.fetchall()
+
+            result: list[dict] = []
+            for enr_id, name, p_email, school_id, slot_id, dow in matches:
+                cur.execute(
+                    "SELECT id FROM orders WHERE session_slot_id = %s AND session_date = %s",
+                    (slot_id, session_date),
+                )
+                order_row = cur.fetchone()
+                order_id = order_row[0] if order_row else None
+
+                order_sent = False
+                if order_id is not None:
+                    cur.execute(
+                        """
+                        SELECT 1 FROM outbound_emails
+                        WHERE email_type = 'session_order'
+                          AND status = 'sent'
+                          AND related_order_id = %s
+                        LIMIT 1
+                        """,
+                        (order_id,),
+                    )
+                    order_sent = cur.fetchone() is not None
+
+                result.append({
+                    "enrolment_id":    enr_id,
+                    "student_name":    name,
+                    "parent_email":    p_email,
+                    "school_id":       school_id,
+                    "session_slot_id": slot_id,
+                    "session_date":    session_date,
+                    "day_of_week":     dow,
+                    "order_exists":    order_id is not None,
+                    "order_id":        order_id,
+                    "order_sent":      order_sent,
+                })
+
+    if email_addr:
+        preferred = [r for r in result if (r["parent_email"] or "").lower() == email_addr]
+        if preferred:
+            return preferred
+    return result
+
+
 def get_enrolment_dietary_tags(enrolment_id: int) -> list[str]:
     """Return list of dietary tag name strings for an enrolment."""
     with get_conn() as conn:
@@ -145,13 +249,10 @@ def get_enrolment_dietary_tags(enrolment_id: int) -> list[str]:
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
-_YEAR_LEVEL_RE = re.compile(r'[Yy]ear\s+(\d+)\s+excluded', re.IGNORECASE)
+_EMAIL_RE = re.compile(r'[\w.+-]+@[\w.-]+\.\w+')
 
 
-def _is_year_level_exclusion(reason: str) -> bool:
-    return bool(_YEAR_LEVEL_RE.search(reason))
-
-
-def _extract_year_level(reason: str) -> int | None:
-    m = _YEAR_LEVEL_RE.search(reason)
-    return int(m.group(1)) if m else None
+def _extract_email_address(raw: str) -> str | None:
+    """Pull a bare lowercased address out of a From header ("Name <a@b.com>" → a@b.com)."""
+    m = _EMAIL_RE.search(raw or "")
+    return m.group(0).lower() if m else None

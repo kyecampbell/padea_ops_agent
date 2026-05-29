@@ -63,8 +63,6 @@ class Settings(BaseSettings):
     # Order composition
     # -----------------------------------------------------------------------
     order_hours_before_session: int = _yaml.get("order_hours_before_session", 72)
-    exclusion_buffer_rate: float = _yaml.get("exclusion_buffer_rate", 0.10)
-    standard_contingency_meals: int = _yaml.get("standard_contingency_meals", 0)
 
     # -----------------------------------------------------------------------
     # MOQ

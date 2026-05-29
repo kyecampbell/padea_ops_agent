@@ -6,7 +6,6 @@ Adds upcoming school events that affect catering orders:
   1. ISHS Year 10 school camp — week of Jun 8 (Mon–Thu)
      Year 10 students at all three ISHS sessions are excluded (non-dietary only).
      Dietary-restricted Year 10 students still receive a meal per CLAUDE.md rule 3.
-     Triggers the 10% exclusion buffer for each affected ISHS session.
 
   2. QLD Term 2 school holidays — Jun 29 – Jul 10
      All 6 schools have whole-session exclusions for this period.

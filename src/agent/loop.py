@@ -5,8 +5,8 @@ Claude tool-calling agent loop for the Padea Operations Agent.
 
 Responsibilities:
   - TOOL_SCHEMAS:  27 JSON schemas exposed to the Claude API.
-  - TOOL_REGISTRY: tool name → Python callable (26 entries; add_note excluded).
-  - _PARAM_TYPES:  coercion map for date/datetime parameters (15 entries).
+  - TOOL_REGISTRY: tool name → Python callable (27 entries; add_note excluded).
+  - _PARAM_TYPES:  coercion map for date/datetime parameters (16 entries).
   - _serialise():  recursive JSON-safe serialiser.
   - dispatch():    coerce → call → serialise → return (result, is_error).
   - run():         full agent loop (STEP 3 — not yet implemented).
@@ -23,7 +23,7 @@ from zoneinfo import ZoneInfo
 
 import anthropic
 
-from config.settings import settings
+from config.settings import settings, validate_settings
 from src.tools.infrastructure import (
     create_agent_run,
     complete_agent_run,
@@ -31,7 +31,11 @@ from src.tools.infrastructure import (
     check_and_resolve_crashed_runs,
 )
 from src.tools.sessions import get_sessions_needing_orders, get_session_slot
-from src.tools.enrolments import get_enrolments_for_session, get_enrolment_dietary_tags
+from src.tools.enrolments import (
+    get_enrolments_for_session,
+    get_enrolment_dietary_tags,
+    find_session_for_absence,
+)
 from src.tools.meals import (
     item_is_safe_for_enrolment,
     auto_pick_dietary_meal,
@@ -316,6 +320,41 @@ TOOL_SCHEMAS: list[dict] = [
     },
 
     # ── ABSENCES ──────────────────────────────────────────────────────────────
+
+    {
+        "name": "find_session_for_absence",
+        "description": (
+            "Resolve an inbound absence email to the enrolment + session it refers "
+            "to, and report whether that session's order has already gone out. An "
+            "absence email gives a student NAME and a date, not an enrolment_id — "
+            "this tool bridges that. Matches active enrolments by case-insensitive "
+            "student_name, finds the session_slot for that date's weekday, and "
+            "reports order status. Returns a list of candidates: {enrolment_id, "
+            "student_name, parent_email, school_id, session_slot_id, session_date, "
+            "day_of_week, order_exists, order_id, order_sent}. Empty list = no match "
+            "(escalate). More than one row = ambiguous match (escalate). Use the "
+            "returned enrolment_id for upsert_absence; if order_exists/order_sent is "
+            "true, do NOT amend the order — record the absence for audit only."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "student_name": {
+                    "type": "string",
+                    "description": "Student name as written in the absence email.",
+                },
+                "session_date": {
+                    "type": "string",
+                    "description": "ISO date YYYY-MM-DD of the session the student will miss.",
+                },
+                "parent_email": {
+                    "type": "string",
+                    "description": "Raw From address of the email (optional; 'Name <a@b>' is handled).",
+                },
+            },
+            "required": ["student_name", "session_date"],
+        },
+    },
 
     {
         "name": "get_absence",
@@ -816,7 +855,7 @@ TOOL_SCHEMAS: list[dict] = [
 
 
 # =============================================================================
-# TOOL REGISTRY — name → Python callable (26 entries; add_note excluded)
+# TOOL REGISTRY — name → Python callable (27 entries; add_note excluded)
 # =============================================================================
 # add_note is NOT registered here. dispatch() special-cases it before the
 # registry lookup and logs via log_agent_step directly.
@@ -826,6 +865,7 @@ TOOL_REGISTRY: dict[str, Any] = {
     "get_session_slot":            get_session_slot,
     "get_enrolments_for_session":  get_enrolments_for_session,
     "get_enrolment_dietary_tags":  get_enrolment_dietary_tags,
+    "find_session_for_absence":    find_session_for_absence,
     "item_is_safe_for_enrolment":  item_is_safe_for_enrolment,
     "auto_pick_dietary_meal":      auto_pick_dietary_meal,
     "get_meal_request":            get_meal_request,
@@ -852,7 +892,7 @@ TOOL_REGISTRY: dict[str, Any] = {
 
 
 # =============================================================================
-# PARAMETER TYPE COERCION MAP — 15 entries
+# PARAMETER TYPE COERCION MAP — 16 entries
 # date/datetime params arrive from the Claude API as JSON strings and must be
 # coerced before calling the real Python functions.
 #
@@ -870,6 +910,7 @@ _PARAM_TYPES: dict[tuple[str, str], type] = {
 
     # Enrolments
     ("get_enrolments_for_session",  "session_date"):    date,
+    ("find_session_for_absence",    "session_date"):    date,
 
     # Meals
     ("get_meal_request",            "session_date"):    date,
@@ -937,6 +978,7 @@ def dispatch(
     tool_input: dict,
     run_id: int,
     step_index: int,
+    as_of_override: "datetime | None" = None,
 ) -> tuple[Any, bool]:
     """
     Execute a tool call and return (result, is_error).
@@ -1002,7 +1044,7 @@ def dispatch(
     # The real Python function requires as_of (not optional). Other as_of params
     # (compute_rolling_mean) handle None internally; no injection needed.
     if tool_name == "get_sessions_needing_orders" and "as_of" not in coerced:
-        coerced["as_of"] = datetime.now(tz=BRISBANE)
+        coerced["as_of"] = as_of_override or datetime.now(tz=BRISBANE)
 
     # The loop owns run_id; the model never sees it (not in the system prompt or
     # the trigger message). Inject it for the email tools so related_run_id is
@@ -1028,9 +1070,15 @@ def dispatch(
 # AGENT LOOP — STEP 3 (not yet implemented)
 # =============================================================================
 
-def run(trigger_reason: str) -> None:
+def run(trigger_reason: str, as_of_override: "datetime | None" = None) -> None:
     """
     Main agent entry point. Called by the scheduler or directly in tests.
+
+    as_of_override: demo-clock support. When set, it is used as the default
+    `as_of` for get_sessions_needing_orders whenever the model omits that
+    argument — so a demo operator can drive the real workflow at a fake
+    "current time" without redirecting any real-time behaviour (the inbound
+    poll still reads the live inbox at real now).
 
     STEP 3a: bare loop skeleton (create_agent_run, model call, dispatch, log,
              feed-back cycle, clean end_turn termination, exception handler).
@@ -1039,8 +1087,20 @@ def run(trigger_reason: str) -> None:
              uncounted final summarising call; [CAP HIT at N/N] completion note).
     STEP 3c (next): safety_records unconditional logging.
     """
+    # Startup housekeeping (system prompt §1). Abort before touching the DB if the
+    # environment is misconfigured. The production-mode line is a warning, not a
+    # blocker — filter it so demo runs aren't aborted by it.
+    blocking = [e for e in validate_settings() if not e.startswith("WARNING")]
+    if blocking:
+        raise RuntimeError(
+            "Configuration errors prevent run:\n  - " + "\n  - ".join(blocking)
+        )
+
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
     run_id = create_agent_run(trigger_reason=trigger_reason)
+    # Close any prior run left 'running' past the staleness threshold. The run we
+    # just created has started_at=now(), so it is never a candidate here.
+    check_and_resolve_crashed_runs(settings.crashed_run_staleness_minutes)
     system_prompt = _load_system_prompt()
     messages: list[dict] = [{"role": "user", "content": trigger_reason}]
     step_index = 0
@@ -1121,7 +1181,9 @@ def run(trigger_reason: str) -> None:
                     continue
 
                 # ── dispatch ──────────────────────────────────────────────────
-                result, is_error = dispatch(tool_name, tool_input, run_id, step_index)
+                result, is_error = dispatch(
+                    tool_name, tool_input, run_id, step_index, as_of_override
+                )
                 call_count += 1
 
                 # Serialise to JSON string BEFORE logging so is_error reflects

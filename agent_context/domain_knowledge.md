@@ -88,7 +88,10 @@ Each student has an approved meal set for the current caterer (`term_meal_prefer
 4. Not individually absent (unless dietary-restricted)
 5. Not in excluded year level (unless dietary-restricted)
 6. → Remaining students get meals via request or rotation
-7. → Year-level exclusion buffer: `ceil(0.10 × excluded_count)` contingency meals
+
+Zero operational margin (V4): no contingency/buffer meals of any kind. Walk-backs
+are an accepted gap, covered in practice by surplus from late absences (orders are
+locked at T-72hrs and never amended for absences reported afterwards).
 
 ---
 

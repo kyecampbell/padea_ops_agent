@@ -30,14 +30,29 @@ from config.settings import settings
 from src.ingest.db import get_conn
 
 # =============================================================================
-# DEMO VIEW — runs shown by default, in narrative order. Editable.
-#   16 = clean T-72h order (sent cleanly via Gmail)
-#    9 = vegetarian-option dietary-safety fallback
-#   20 = regenerated Monday consolidated summary (payment-only caterer email;
-#        urgent decline + notable swap; supersedes run 19)
-#   18 = inbound escalation (Haiku classify -> Sonnet urgent)
+# DEMO VIEW — runs shown by default, in narrative order.
+#
+# LIVE MODE (default): leave this EMPTY. The demo view then shows every run in
+# the DB, oldest-first — so after a reset you just talk to the agent and each
+# new run appears in the timeline as it happens, no editing needed.
+#
+# CURATED MODE: set explicit ids (e.g. [16, 9, 20, 18]) to pin a hand-picked
+# narrative order; anything else drops to the full-history toggle.
 # =============================================================================
-DEMO_RUN_IDS: list[int] = [16, 9, 20, 18]
+DEMO_RUN_IDS: list[int] = []
+
+
+def resolve_demo_run_ids(runs: list[dict]) -> list[int]:
+    """Ordered run ids for the curated demo view.
+
+    If DEMO_RUN_IDS is set, use it verbatim. If empty (live mode), fall back to
+    every run in the DB sorted oldest-first by started_at, so a live demo
+    (reset -> talk to the agent) surfaces each new run automatically.
+    """
+    if DEMO_RUN_IDS:
+        return DEMO_RUN_IDS
+    _epoch = datetime.min.replace(tzinfo=timezone.utc)
+    return [r["id"] for r in sorted(runs, key=lambda r: r["started_at"] or _epoch)]
 
 _OUT_PATH = Path(__file__).parent.parent / "renderer" / "index.html"
 _LOGO_PATH = Path(__file__).parent.parent / "renderer" / "padealogo.webp"
@@ -147,6 +162,40 @@ def fetch_emails() -> dict[int, dict]:
                 }
                 for r in cur.fetchall()
             }
+
+
+def fetch_recent_disruptions(back_days: int = 14, fwd_days: int = 21) -> list[dict]:
+    """Whole-school / year-level exclusions whose start_date falls in a window
+    around now (Brisbane) — recent past plus near future — so the operator can
+    see sessions that were or will be cancelled (e.g. a school with no session
+    this week). Read-only. School-holiday closures are excluded: they are a
+    known term-boundary event, not an operational disruption worth flagging."""
+    now = datetime.now(tz=_TZ_BNE).date()
+    lo, hi = now - timedelta(days=back_days), now + timedelta(days=fwd_days)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT e.start_date, sc.name, e.reason, e.year_levels_excluded
+                FROM exclusions e
+                JOIN schools sc ON sc.id = e.school_id
+                WHERE e.start_date BETWEEN %s AND %s
+                  AND e.reason NOT ILIKE '%%school holidays%%'
+                ORDER BY e.start_date, sc.name
+                """,
+                (lo, hi),
+            )
+            rows = cur.fetchall()
+    out: list[dict] = []
+    for start_date, school_name, reason, year_levels in rows:
+        out.append({
+            "date": start_date,
+            "school_name": school_name,
+            "reason": reason,
+            "year_levels": list(year_levels or []),
+            "is_past": start_date < now,
+        })
+    return out
 
 
 def fetch_upcoming_sessions(hours: int = 168) -> list[dict]:
@@ -290,6 +339,31 @@ def fetch_chart_data() -> dict:
             )
             cost_rows = cur.fetchall()
 
+            # Per-SCHOOL weekly cost. Recomputed cleanly from meal COUNT x the
+            # caterer's flat per-item price (the source menus charge one rate per
+            # caterer, e.g. Terrific $20.50/item) + delivery x sessions, so it is
+            # consistent across historical orders (which baked delivery into
+            # total_cost_cents) and agent-composed orders (which did not), with no
+            # delivery double-count. GST is applied once at the boundary per the
+            # caterer's treatment. Reconciles to the weekly summary TOTAL DUE.
+            cur.execute(
+                """
+                SELECT ss.school_id, date_trunc('week', o.session_date)::date,
+                       o.caterer_id, sum(o.total_items)::int, count(*)::int
+                FROM orders o
+                JOIN session_slots ss ON ss.id = o.session_slot_id
+                GROUP BY 1, 2, 3
+                ORDER BY 1, 2
+                """
+            )
+            school_cost_rows = cur.fetchall()
+
+            # Flat per-item price per caterer (all menu items share one price).
+            cur.execute(
+                "SELECT caterer_id, min(price_cents)::int FROM menu_items GROUP BY 1"
+            )
+            unit_price = {cid: price for cid, price in cur.fetchall()}
+
             # Weeks the agent actually closed with a consolidated summary, read
             # from structured step input (robust to film-time live re-runs).
             cur.execute(
@@ -297,6 +371,36 @@ def fetch_chart_data() -> dict:
                    WHERE tool_name = 'generate_weekly_summary'"""
             )
             summary_step_rows = cur.fetchall()
+
+            # Inputs for the per-bar "N absent · M excluded" labels.
+            # Roster = enrolled students per slot (the full expected headcount).
+            cur.execute(
+                "SELECT session_slot_id, count(*)::int "
+                "FROM enrolment_session_slots GROUP BY 1"
+            )
+            roster_by_slot = {s: n for s, n in cur.fetchall()}
+            # School + weekday for each slot, to map an exclusion date to a slot.
+            cur.execute("SELECT id, school_id, day_of_week FROM session_slots")
+            slot_meta = {sid: (sch, dow) for sid, sch, dow in cur.fetchall()}
+            # Meals actually ordered per (slot, week).
+            cur.execute(
+                """SELECT o.session_slot_id,
+                          date_trunc('week', o.session_date)::date,
+                          o.total_items
+                   FROM orders o"""
+            )
+            items_by_slot_week = {
+                (sid, wk.isoformat()): items for sid, wk, items in cur.fetchall()
+            }
+            # Whole-session exclusions (no year-level restriction) → cancelled
+            # sessions whose roster counts as "excluded" that week.
+            cur.execute(
+                """SELECT school_id, start_date
+                   FROM exclusions
+                   WHERE school_id IS NOT NULL
+                     AND COALESCE(array_length(year_levels_excluded, 1), 0) = 0"""
+            )
+            whole_exclusions = {(sch, d) for sch, d in cur.fetchall()}
 
     caterer_params = {
         cid: {
@@ -360,12 +464,56 @@ def fetch_chart_data() -> dict:
             }
         )
 
+    # Per-school weekly cost series, keyed by school_id. Clean basis: meal count x
+    # flat unit price + delivery x sessions, GST-normalised, restricted to the same
+    # full/summarised weeks as the satisfaction baseline.
+    # Slots grouped by school, for the per-bar absence/exclusion tally.
+    slots_by_school: dict[int, list[int]] = {}
+    for slot_id, (sch, _dow) in slot_meta.items():
+        slots_by_school.setdefault(sch, []).append(slot_id)
+
+    def _absence_tally(sid: int, wk_iso: str) -> tuple[int, int]:
+        """For one (school, week): students absent from sessions that ran, plus
+        students cut by a whole-session exclusion (no order that week)."""
+        wk_start = date.fromisoformat(wk_iso)  # Monday of the ISO week
+        absent = excluded = 0
+        for slot_id in slots_by_school.get(sid, []):
+            roster = roster_by_slot.get(slot_id, 0)
+            items = items_by_slot_week.get((slot_id, wk_iso))
+            if items is not None:
+                absent += max(0, roster - items)
+            else:
+                _sch, dow = slot_meta[slot_id]
+                session_date = wk_start + timedelta(days=dow - 1)
+                if (sid, session_date) in whole_exclusions:
+                    excluded += roster
+        return absent, excluded
+
+    school_cost: dict[int, list[dict]] = {}
+    for sid, wk, cid, items_sum, n_orders in school_cost_rows:
+        wk_iso = wk.isoformat()
+        if wk_iso not in allowed_weeks.get(cid, set()):
+            continue  # stray single-session / un-summarised test week
+        p = caterer_params[cid]
+        ex_subtotal = (items_sum or 0) * unit_price.get(cid, 0) \
+            + p["delivery_fee_cents"] * n_orders
+        if p["price_includes_gst"]:
+            grand = ex_subtotal
+        else:
+            grand = round(ex_subtotal * (1 + p["gst_rate"] / 100))
+        absent, excluded = _absence_tally(sid, wk_iso)
+        school_cost.setdefault(sid, []).append(
+            {"week": wk_iso, "dollars": round(grand / 100, 2),
+             "sessions": n_orders, "absent": absent, "excluded": excluded}
+        )
+
     schools = [
         {
             "id": r[0],
             "name": r[1],
             "caterer_id": r[2],
             "satisfaction": school_satisfaction.get(r[0], []),
+            "cost": school_cost.get(r[0], []),
         }
         for r in schools_raw
     ]
@@ -843,6 +991,7 @@ details.history[open] > summary { margin-bottom: 16px; }
 .axislabel { fill: var(--muted); font-size: 11px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
 .axistitle { fill: var(--muted); font-size: 12px; font-weight: 600; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
 .ptlabel { fill: var(--ink); font-size: 10px; font-variant-numeric: tabular-nums; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.barabs { fill: var(--muted); font-size: 9px; font-variant-numeric: tabular-nums; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .dataline { fill: none; stroke: #2563c9; stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round; }
 .datapt { fill: #2563c9; }
 .datapt--bad { fill: var(--urgent); }
@@ -990,13 +1139,14 @@ def run_outcome(run: dict, emails: dict[int, dict]) -> str:
 
 
 def render_panel(runs: list[dict], emails: dict[int, dict],
-                 upcoming: list[dict]) -> str:
+                 upcoming: list[dict], disruptions: list[dict]) -> str:
     by_id = {r["id"]: r for r in runs}
-    demo_runs = [by_id[rid] for rid in DEMO_RUN_IDS if rid in by_id]
+    demo_id_list = resolve_demo_run_ids(runs)
+    demo_runs = [by_id[rid] for rid in demo_id_list if rid in by_id]
 
     # --- Part 1: escalations needing attention -------------------------------
     # Action required: queued-for-approval emails on demo runs.
-    demo_ids = set(DEMO_RUN_IDS)
+    demo_ids = set(demo_id_list)
     queued = [
         e for e in emails.values()
         if e["status"] == "queued_for_approval" and e["related_run_id"] in demo_ids
@@ -1065,7 +1215,25 @@ def render_panel(runs: list[dict], emails: dict[int, dict],
         p.append('    </div>')
     p.append('  </div>')
 
-    # 3. Upcoming sessions — next 5, so the panel stays scannable
+    # 3. Recent & upcoming disruptions — cancelled / partially-excluded sessions
+    #    in a window around now, so a school with no session this week is visible.
+    p.append('  <div class="panel__block">')
+    p.append('    <h3 class="panel__h">Recent &amp; upcoming disruptions</h3>')
+    if not disruptions:
+        p.append('    <div class="panel__empty">No session disruptions in this window.</div>')
+    for d in disruptions:
+        when = d["date"].strftime("%a %-d %b %Y")
+        tag = "was off" if d["is_past"] else "scheduled off"
+        scope = (f"Years {', '.join(str(y) for y in d['year_levels'])}"
+                 if d["year_levels"] else "whole session")
+        p.append('    <div class="upcoming">')
+        p.append(f'      <span class="upcoming__when">{esc(when)} · {esc(tag)}</span>'
+                 f'<span class="upcoming__school">{esc(d["school_name"])}</span>'
+                 f'<span class="upcoming__room">{esc(scope)} &mdash; {esc(d["reason"])}</span>'
+                 '</div>')
+    p.append('  </div>')
+
+    # 4. Upcoming sessions — next 5, so the panel stays scannable
     p.append('  <div class="panel__block">')
     shown = upcoming[:5]
     extra = len(upcoming) - len(shown)
@@ -1145,7 +1313,7 @@ _CHART_JS = """
     series.forEach(function (p, i) {
       var below = opts.floor != null && p.value < opts.floor;
       svg.appendChild(el('circle', { cx: xOf(i), cy: yOf(p.value), r: 4, class: 'datapt' + (below ? ' datapt--bad' : '') }));
-      svg.appendChild(el('text', { x: xOf(i), y: yOf(p.value) - 9, class: 'ptlabel', 'text-anchor': 'middle' }, p.value.toFixed(1)));
+      svg.appendChild(el('text', { x: xOf(i), y: yOf(p.value) - 9, class: 'ptlabel', 'text-anchor': 'middle' }, Number(p.value).toPrecision(3)));
     });
     svg.appendChild(el('text', { x: m.l + iw / 2, y: H - 6, class: 'axistitle', 'text-anchor': 'middle' }, opts.xtitle));
     var midy = m.t + ih / 2;
@@ -1156,7 +1324,7 @@ _CHART_JS = """
   function barChart(container, series, opts) {
     container.innerHTML = '';
     if (!series || series.length === 0) { emptyNote(container, opts.emptyMsg); return; }
-    var W = 660, H = 290, m = { t: 18, r: 20, b: 44, l: 64 };
+    var W = 660, H = 304, m = { t: 36, r: 20, b: 44, l: 64 };
     var iw = W - m.l - m.r, ih = H - m.t - m.b;
     var maxv = Math.max.apply(null, series.map(function (p) { return p.value; }));
     var ymax = niceMax(maxv), n = series.length;
@@ -1174,6 +1342,14 @@ _CHART_JS = """
       var y = yOf(p.value), h = m.t + ih - y;
       svg.appendChild(el('rect', { x: cx - bw / 2, y: y, width: bw, height: h, class: 'bar' }));
       svg.appendChild(el('text', { x: cx, y: y - 6, class: 'ptlabel', 'text-anchor': 'middle' }, '$' + Math.round(p.value).toLocaleString()));
+      // Attendance context above the dollar figure: absences in sessions that ran,
+      // plus any whole-session exclusion that week.
+      var absParts = [];
+      if (p.absent != null) absParts.push(p.absent + ' absent');
+      if (p.excluded) absParts.push(p.excluded + ' excluded');
+      if (absParts.length) {
+        svg.appendChild(el('text', { x: cx, y: y - 19, class: 'barabs', 'text-anchor': 'middle' }, absParts.join(' \\u00B7 ')));
+      }
       svg.appendChild(el('text', { x: cx, y: H - m.b + 18, class: 'axislabel', 'text-anchor': 'middle' }, fmtWeek(p.week)));
     });
     svg.appendChild(el('text', { x: m.l + iw / 2, y: H - 6, class: 'axistitle', 'text-anchor': 'middle' }, opts.xtitle));
@@ -1218,10 +1394,13 @@ _CHART_JS = """
       note.textContent = 'Up to ' + maxN + ' ratings per week for this school.';
     }
 
-    var cost = cat ? cat.cost.map(function (p) { return { week: p.week, value: p.dollars }; }) : [];
+    var costSeries = school ? (school.cost || []) : [];
+    var cost = costSeries.map(function (p) {
+      return { week: p.week, value: p.dollars, absent: p.absent, excluded: p.excluded };
+    });
     barChart(document.getElementById('costChart'), cost, {
       ytitle: 'Amount payable (A$)', xtitle: 'Week beginning',
-      emptyMsg: 'Limited data \\u2014 no orders recorded for this caterer yet.'
+      emptyMsg: 'Limited data \\u2014 no orders recorded for this school yet.'
     });
 
     // Awaiting-feedback marker: a week is ordered (so it has a cost bar) before
@@ -1229,7 +1408,7 @@ _CHART_JS = """
     // stops one week short. Make that explicit, not a truncation bug.
     var pend = document.getElementById('satPendingNote');
     var lastSat = satSeries.length ? satSeries[satSeries.length - 1].week : null;
-    var lastCost = (cat && cat.cost.length) ? cat.cost[cat.cost.length - 1].week : null;
+    var lastCost = costSeries.length ? costSeries[costSeries.length - 1].week : null;
     if (lastSat && lastCost && lastCost > lastSat) {
       pend.innerHTML = '\\u25CB Week of ' + fmtWeek(lastCost) + ' is ordered (see the '
         + 'cost chart) but its sessions have not run yet \\u2014 it will get a '
@@ -1299,7 +1478,7 @@ def render_glance(chart_data: dict) -> str:
             continue
         width = max(0.0, min(100.0, r["mean"] / 5.0 * 100.0))
         wk = date.fromisoformat(r["week"])
-        title = (f'{r["name"]} — {r["mean"]:.1f} mean from {r["n"]} rating(s), '
+        title = (f'{r["name"]} — {r["mean"]:.3g} mean from {r["n"]} rating(s), '
                  f'week of {wk.strftime("%-d %b %Y")}')
         p.append('      <div class="glance__row" title="%s">' % esc(title))
         p.append(f'        <span class="glance__name">{esc(r["name"])}</span>')
@@ -1308,7 +1487,7 @@ def render_glance(chart_data: dict) -> str:
         p.append(f'          <div class="glance__fill glance__fill--{band}" '
                  f'style="width:{width:.1f}%"></div>')
         p.append('        </div>')
-        p.append(f'        <span class="glance__val glance__val--{band}">{r["mean"]:.1f}</span>')
+        p.append(f'        <span class="glance__val glance__val--{band}">{r["mean"]:.3g}</span>')
         p.append('      </div>')
     p.append('    </div>')
     p.append(f'    <div class="chart-note">Each school&rsquo;s mean score for its most '
@@ -1349,15 +1528,11 @@ def render_charts_section(chart_data: dict) -> str:
              'warning.</div>')
     p.append('  </div>')
     p.append('  <div class="chart-card">')
-    p.append('    <h3 class="panel__h">Cost over time '
-             '<span class="chart-scope">caterer invoice (covers all this '
-             'caterer&rsquo;s schools)</span></h3>')
+    p.append('    <h3 class="panel__h">Cost over time</h3>')
     p.append('    <div id="costChart" class="chart-host"></div>')
-    p.append('    <div class="chart-note">Weekly amount payable to the caterer '
-             '&mdash; meals + delivery, GST-inclusive &mdash; the same basis as '
-             'the consolidated weekly summary, so each bar reconciles to that '
-             'week&rsquo;s TOTAL DUE. Only full, summarised operational weeks are '
-             'shown.</div>')
+    p.append('    <div class="chart-note">Weekly spend on this school &mdash; meals '
+             '(count &times; the caterer&rsquo;s per-item price) plus delivery, '
+             'GST-inclusive. Only full, summarised operational weeks are shown.</div>')
     p.append('  </div>')
     p.append('  <script>')
     p.append('  const CHART_DATA = ' + data_json + ';')
@@ -1368,12 +1543,14 @@ def render_charts_section(chart_data: dict) -> str:
 
 
 def render_page(runs: list[dict], emails: dict[int, dict],
-                upcoming: list[dict], chart_data: dict) -> str:
+                upcoming: list[dict], disruptions: list[dict],
+                chart_data: dict) -> str:
     by_id = {r["id"]: r for r in runs}
 
-    # Demo runs in the explicit narrative order of DEMO_RUN_IDS.
-    demo_runs = [by_id[rid] for rid in DEMO_RUN_IDS if rid in by_id]
-    demo_ids = set(DEMO_RUN_IDS)
+    # Demo runs in the resolved order (explicit DEMO_RUN_IDS, or all runs live).
+    demo_id_list = resolve_demo_run_ids(runs)
+    demo_runs = [by_id[rid] for rid in demo_id_list if rid in by_id]
+    demo_ids = set(demo_id_list)
     # Full history = everything not in the demo view, reverse-chronological
     # (newest first) by started_at; runs with no start time sort to the end.
     _epoch = datetime.min.replace(tzinfo=timezone.utc)
@@ -1383,7 +1560,7 @@ def render_page(runs: list[dict], emails: dict[int, dict],
         reverse=True,
     )
 
-    generated = datetime.now().strftime("%Y-%m-%d %H:%M")
+    generated = datetime.now(tz=_TZ_BNE).strftime("%Y-%m-%d %H:%M") + " AEST"
 
     out = ['<!DOCTYPE html>', '<html lang="en">', '<head>',
            '<meta charset="utf-8">',
@@ -1404,20 +1581,21 @@ def render_page(runs: list[dict], emails: dict[int, dict],
     out.append('  </div>')
     out.append('</header>')
 
-    out.append(render_panel(runs, emails, upcoming))
+    out.append(render_panel(runs, emails, upcoming, disruptions))
     out.append(render_charts_section(chart_data))
 
     out.append('<div class="section-label">Run timeline</div>')
     for run in demo_runs:
         out.append(render_run_section(run, emails))
 
-    out.append(
-        f'<details class="history">'
-        f'<summary>Full run history ({len(history_runs)} more runs, newest first)</summary>'
-    )
-    for run in history_runs:
-        out.append(render_run_section(run, emails))
-    out.append('</details>')
+    if history_runs:
+        out.append(
+            f'<details class="history">'
+            f'<summary>Full run history ({len(history_runs)} more runs, newest first)</summary>'
+        )
+        for run in history_runs:
+            out.append(render_run_section(run, emails))
+        out.append('</details>')
 
     out.append('</div>')
     out.append(f'<script>{_APPROVE_JS}</script>')
@@ -1429,19 +1607,24 @@ def main() -> None:
     runs = fetch_runs()
     emails = fetch_emails()
     upcoming = fetch_upcoming_sessions()
+    disruptions = fetch_recent_disruptions()
     chart_data = fetch_chart_data()
     _OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     _OUT_PATH.write_text(
-        render_page(runs, emails, upcoming, chart_data), encoding="utf-8"
+        render_page(runs, emails, upcoming, disruptions, chart_data),
+        encoding="utf-8",
     )
 
-    demo_present = [rid for rid in DEMO_RUN_IDS if any(r["id"] == rid for r in runs)]
     print(f"Wrote {_OUT_PATH}")
     print(f"  total runs: {len(runs)}")
-    print(f"  demo runs present: {demo_present}")
-    missing = [rid for rid in DEMO_RUN_IDS if rid not in demo_present]
-    if missing:
-        print(f"  WARNING — demo runs missing from DB: {missing}")
+    if DEMO_RUN_IDS:
+        demo_present = [rid for rid in DEMO_RUN_IDS if any(r["id"] == rid for r in runs)]
+        print(f"  mode: CURATED — demo runs present: {demo_present}")
+        missing = [rid for rid in DEMO_RUN_IDS if rid not in demo_present]
+        if missing:
+            print(f"  WARNING — demo runs missing from DB: {missing}")
+    else:
+        print(f"  mode: LIVE — showing all {len(runs)} run(s), oldest first")
 
 
 if __name__ == "__main__":

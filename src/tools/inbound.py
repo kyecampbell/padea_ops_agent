@@ -98,6 +98,14 @@ def gmail_poll_inbox(
     received after it are returned (Gmail `after:` filter). Dedup via
     inbound_email_records is the authoritative double-process guard regardless.
 
+    The agent runs on a simulated demo clock (`as_of`) that can be AHEAD of the
+    real wall clock, while real inbound mail carries real-now timestamps. A
+    future `after:` filter would therefore hide genuinely new mail and return an
+    empty poll. So the `after:` bound is clamped to never exceed real "now": if
+    the supplied timestamp is in the future, the filter is skipped entirely and
+    we rely on `is:unread` + the inbound_email_records dedup, which is correct
+    and sufficient.
+
     Returns list of dicts:
         {gmail_message_id, from_address, subject, received_at (ISO), body}
     Empty list if nothing new.
@@ -105,7 +113,10 @@ def gmail_poll_inbox(
     query = "in:inbox is:unread"
     if since_last_run_timestamp:
         dt = datetime.fromisoformat(since_last_run_timestamp)
-        query += f" after:{int(dt.timestamp())}"
+        real_now = datetime.now(tz=dt.tzinfo) if dt.tzinfo else datetime.now()
+        if dt <= real_now:
+            query += f" after:{int(dt.timestamp())}"
+        # else: future demo timestamp — skip after: so real mail isn't hidden.
 
     entries = gmail_client.list_messages(query, max_results=max_results)
     if not entries:

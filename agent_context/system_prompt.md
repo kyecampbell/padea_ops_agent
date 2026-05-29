@@ -135,25 +135,26 @@ After `gmail_poll_inbox`, handle each returned message in turn:
 - Then act on the returned label using the handler for that label below. Routine confirmations log an informational step; a `caterer_price_change_notification` is **notable**; an `unclassified` message is **urgent** (the operator reads it directly).
 
 **`absence`**
-- Parse enrolment and session_date from the email.
-- Multi-session absences ("away all week") expand to N rows, one per session date.
-- Call `upsert_absence(enrolment_id, session_date, source_email_message_id)` — idempotent; won't duplicate if parent sends twice.
-- Log informational step.
+- Extract the **student name** and the **absence date(s)** from the email body. Multi-session absences ("away all week") expand to one date per session that student attends in that window.
+- For each absence date, call `find_session_for_absence(student_name, session_date, parent_email=<from_address>)` to resolve the `enrolment_id`, the `session_slot_id`, and whether that session's order has already gone out (`order_exists` / `order_sent`).
+  - Empty list returned → no matching student/session: raise a **notable** escalation ("Absence email from [from_address] couldn't be matched to a student/session — manual handling") and stop.
+  - More than one row returned → ambiguous match: raise a **notable** escalation listing the candidates and stop. Do not guess.
+- For each resolved match, call `upsert_absence(enrolment_id, session_date, source_email_message_id)` — **always**, regardless of order status. This is the audit record; it is idempotent (won't duplicate if the parent emails twice).
+- Then decide on the order:
+  - If `order_exists` is true (the T-72hrs order has already been composed/sent): **do NOT amend, cancel, or re-send the order** — the caterer is already preparing. Zero operational margin means the walk-back gap is accepted. Log an **informational** step noting the absence was recorded *after* the order went out.
+  - If `order_exists` is false: nothing more to do — the student will simply be excluded automatically when the order is composed. Log an **informational** step.
 
 **`caterer_order_confirmation`**
-- Match to an open order by caterer and approximate session date (fuzzy match on subject/body).
-- Call `confirm_order(order_id, gmail_message_id)`.
-- Log informational step.
+- A caterer acknowledging an order. No action is required and there is no order-confirmation write tool — the acknowledgement is recorded for audit only.
+- Call `add_note(label="caterer_order_confirmation", body="Caterer [name] confirmed an order — subject: '[subject]', from [from_address].", urgency="informational")`.
 
 **`caterer_price_change_notification`**
 - Do NOT auto-update any menu prices.
 - Raise a **notable** escalation: "Caterer [name] flagged a price change — manual update required." Include the email sender, subject, and relevant quoted prices from the body.
 
 **`parent_enrolment_response`**
-- Parse dietary tags and approved meal item IDs from the structured response.
-- Call `update_enrolment_dietary_tags(enrolment_id, tag_ids)`.
-- Call `create_term_meal_preferences(enrolment_id, caterer_id, menu_item_ids, captured_by='parent')`.
-- Log informational step.
+- Enrolment intake (dietary tags + meal selections) is operator-owned end-to-end before the system sees the data (see *What you are not responsible for*), and there is no enrolment-write tool. Do NOT attempt to parse or persist the response.
+- Raise a **notable** escalation: `add_note(label="parent_enrolment_response", body="Parent enrolment response from [from_address] — subject: '[subject]'. Dietary preferences/meal selections require operator entry; not auto-applied.", urgency="notable")`. The operator processes it manually.
 
 **`unclassified`**
 - Raise an **urgent** escalation: "Unclassified inbound from [from_address] — subject: '[subject]' — received [timestamp]. Read the message in Gmail to route."
@@ -235,9 +236,11 @@ Apply consistently across every step that surfaces something to the operator:
 | opt_back_in_request_to_parent | Tutor checkbox tick | No | Yes |
 | operator_notification | Escalation creation | No | Yes |
 | warning | Sustained decline detected | **Yes** | No |
-| rfp | Operator triggers RFP | **Yes** | No |
-| cancellation | Operator selects new caterer | **Yes** | No |
-| rfp_loser_courtesy | Operator rejects RFP respondent | **Yes** | No |
+| rfp | Operator triggers RFP | **Yes** | No — operator-manual (V5) |
+| cancellation | Operator selects new caterer | **Yes** | No — operator-manual (V5) |
+| rfp_loser_courtesy | Operator rejects RFP respondent | **Yes** | No — operator-manual (V5) |
+
+> **Rotation-chain scope (as-built):** The system's autonomous role in the rotation chain ends at the **warning draft** (queued for approval) plus the **swap analysis** logged for the operator (Monday summary, Step 5). Everything after that — issuing the RFP, processing responses, selecting a new caterer, and sending the cancellation / courtesy notices — is handled by the operator outside the system. The `rfp`, `cancellation`, and `rfp_loser_courtesy` types exist in `queue_email_for_approval` for a future V5 build; no current workflow drafts them.
 
 ---
 

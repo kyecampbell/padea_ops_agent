@@ -102,10 +102,3 @@ crashed_run_staleness_minutes: 30
 # Default max delivery radius for caterers who haven't declared their own.
 # V3-CR-01: deliberately generous — we over-reach rather than miss caterers.
 default_caterer_max_delivery_km: 50
-
-# =============================================================================
-# DEMO / SEED DATA
-# =============================================================================
-
-# V4: zero operational margin — no buffer meals of any kind.
-standard_contingency_meals: 0

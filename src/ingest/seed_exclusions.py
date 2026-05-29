@@ -55,6 +55,20 @@ EXCLUSIONS = [
         "School Camp — Year 12 excluded",
         [12],
     ),
+    (
+        "Indooroopilly State High School",
+        datetime.date(2026, 5, 19),
+        datetime.date(2026, 5, 19),
+        "No Tuesday session this week — whole session cancelled, all year levels",
+        None,                # whole session
+    ),
+    (
+        "Indooroopilly State High School",
+        datetime.date(2026, 5, 26),
+        datetime.date(2026, 5, 26),
+        "No Tuesday session this week — whole session cancelled, all year levels",
+        None,                # whole session
+    ),
 ]
 
 

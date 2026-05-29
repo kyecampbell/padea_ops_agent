@@ -35,7 +35,7 @@ Every agent run starts with a Gmail API poll. The system reads every message tha
 
 **Parent absence notifications** create an absence record tied to the relevant student and session. The student is excluded from the next order composition for that session. An absence that arrives before the T-72hrs order has been sent prevents the meal from being ordered at all. An absence that arrives after the order has gone is recorded for audit but does not amend the order — the caterer is already preparing.
 
-**Caterer order confirmations** update the status on the matching order record.
+**Caterer order confirmations** are recorded for audit only — the acknowledgement is logged as a step on the agent run. There is no order-status write.
 
 **Parent enrolment responses** — dietary tags and approved meal set submissions — update the student's enrolment record and admit the student to the rotation from the next session run.
 
@@ -108,6 +108,8 @@ The weekly report regenerates alongside the consolidated summary. It is an HTML 
 ---
 
 ## Sustained decline: the rotation chain
+
+> **As-built scope (V4):** The system's autonomous role ends at the **warning draft** and the **swap analysis** surfaced to the operator. The remaining links described below — issuing the RFP, processing responses, selecting a new caterer, and sending the cancellation and courtesy notices — are operator-manual in V4 and a candidate for a V5 build. The chain is documented here in full because it defines the intended end-to-end process the operator follows; only the warning + analysis links are autonomous today.
 
 When the four-week rolling mean for a caterer drops below 3.0 and has also fallen at least 0.5 points below the prior twelve-week mean, the system fires a sustained-decline escalation. Both thresholds are configurable in `runtime_config.yaml` (`quality_floor: 3.0`, `quality_decline_threshold: 0.5`) — no code change or database migration is required to adjust them. It drafts a polite warning email to the incumbent caterer — naming the quality drop and stating what will happen if scores do not recover. The email sits in the outbound queue; it does not send until the operator approves with one click.
 

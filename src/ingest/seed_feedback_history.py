@@ -68,6 +68,35 @@ SLOT_INFO = {
 CATERER_PRICE = {1: 3500, 2: 2050, 3: 550, 4: 1500}
 CATERER_DELIVERY = {1: 0, 2: 3000, 3: 1000, 4: 0}  # per-session delivery (Terrific: 3000/school/trip)
 
+# Per-week present-student counts by slot (one value per WEEK_STARTS index).
+# The roster (SLOT_INFO["students"]) is the full enrolment / max; real weeks dip
+# below it as students are absent, so meal counts — and therefore per-school
+# weekly cost — fluctuate realistically instead of sitting flat. Quality
+# feedback and the Terrific sustained-decline trigger depend on RATINGS, not
+# these counts, so varying attendance leaves them untouched. Re-running the seed
+# UPDATEs existing historical orders to these counts (idempotent).
+# Sessions that did NOT run (school-side cancellation / whole-session exclusion).
+# The order — and its feedback / order_lines — is removed so the school's weekly
+# cost visibly drops that week. A matching whole-session row lives in
+# seed_exclusions.py so the operator surface shows WHY. (slot_id, session_date).
+CANCELLED_SESSIONS = {
+    (6, datetime.date(2026, 5, 19)),   # ISHS Tue — no session this week
+}
+
+ATTENDANCE = {
+    1:  [16, 15, 16, 14, 16],   # MBBC Tue  — Lakehouse
+    2:  [26, 24, 25, 26, 23],   # JPC Tue   — Terrific
+    3:  [34, 33, 31, 34, 32],   # JPC Wed   — Terrific
+    4:  [7,  7,  6,  7,  5],    # MacGregor Thu — Terrific
+    5:  [34, 32, 34, 33, 30],   # ISHS Mon  — Kenko
+    6:  [43, 41, 40, 43, 42],   # ISHS Tue  — Kenko
+    7:  [37, 35, 37, 34, 37],   # ISHS Thu  — Kenko
+    8:  [33, 33, 31, 32, 33],   # LC Mon    — GyG
+    9:  [19, 18, 19, 17, 19],   # LC Tue    — GyG
+    10: [15, 14, 15, 15, 13],   # CHAC Mon  — GyG
+    11: [37, 36, 34, 37, 35],   # CHAC Wed  — GyG
+}
+
 # Manager feedback ratings by (caterer_id, week_index 0–4): one rating per session.
 # Terrific (caterer 2) engineered to trigger sustained-decline alert.
 RATINGS: dict[int, list[int]] = {
@@ -115,10 +144,62 @@ _MACG_STUDENT = [
     [4, 4, 3, 4, 4, 4],   # W4 mean 3.83
     [3, 4, 3, 3, 3, 3],   # W5 mean 3.17
 ]
+# Student (tutor) ratings for the NON-Terrific schools too, so every school shows
+# a realistic decimal satisfaction line instead of a flat manager integer. These
+# caterers are NOT in decline — the scores stay healthy with mild week-to-week
+# spread (decimals), and none touch caterer 2, so Terrific's locked sustained-
+# decline trigger is unaffected. n=6 students per session, week_index 0–4.
+#   MBBC (Lakehouse)   ~4.5–4.7  excellent
+#   ISHS (Kenko)       ~4.0–4.1  reliable, steady (was flat 4.0 — now decimals)
+#   Loreto (GyG)       ~3.5–3.7  decent, variable
+#   Cannon Hill (GyG)  ~3.3–3.5  decent, variable
+_MBBC_STUDENT = [
+    [5, 4, 5, 5, 4, 5],   # 4.67
+    [4, 5, 4, 5, 5, 4],   # 4.50
+    [5, 5, 4, 4, 5, 5],   # 4.67
+    [5, 4, 5, 4, 5, 4],   # 4.50
+    [4, 5, 5, 4, 5, 5],   # 4.67
+]
+_ISHS_MON = [
+    [4, 4, 4, 5, 4, 3], [4, 5, 4, 4, 4, 4], [4, 4, 3, 4, 5, 4],
+    [5, 4, 4, 4, 4, 4], [4, 4, 4, 5, 4, 4],
+]
+_ISHS_TUE = [
+    [4, 3, 4, 4, 5, 4], [4, 4, 5, 4, 4, 4], [4, 5, 4, 4, 3, 4],
+    [4, 4, 4, 5, 4, 4], [3, 4, 4, 4, 5, 4],
+]
+_ISHS_THU = [
+    [5, 4, 4, 4, 4, 4], [4, 4, 4, 3, 5, 4], [4, 4, 5, 4, 4, 4],
+    [4, 3, 4, 4, 4, 5], [4, 5, 4, 4, 4, 4],
+]
+_LORETO_MON = [
+    [4, 3, 4, 4, 3, 4], [3, 4, 3, 4, 4, 3], [4, 4, 3, 4, 3, 4],
+    [4, 3, 4, 3, 4, 4], [3, 4, 4, 3, 4, 3],
+]
+_LORETO_TUE = [
+    [4, 4, 3, 4, 4, 3], [3, 3, 4, 4, 3, 4], [4, 3, 4, 4, 4, 3],
+    [3, 4, 3, 4, 4, 4], [4, 3, 4, 3, 3, 4],
+]
+_CHAC_MON = [
+    [4, 3, 4, 3, 4, 3], [3, 4, 3, 4, 3, 4], [4, 3, 3, 4, 4, 3],
+    [3, 4, 4, 3, 3, 4], [4, 3, 3, 4, 3, 3],
+]
+_CHAC_WED = [
+    [3, 4, 4, 3, 4, 3], [4, 3, 4, 3, 4, 3], [3, 4, 3, 4, 3, 4],
+    [4, 3, 3, 4, 4, 3], [3, 3, 4, 3, 4, 3],
+]
 SLOT_STUDENT_RATINGS: dict[int, list[list[int]]] = {
-    2: _JPC_STUDENT,   # JPC Tue
-    3: _JPC_STUDENT,   # JPC Wed (same list → JPC school mean = list mean)
-    4: _MACG_STUDENT,  # MacGregor Thu
+    2:  _JPC_STUDENT,   # JPC Tue
+    3:  _JPC_STUDENT,   # JPC Wed (same list → JPC school mean = list mean)
+    4:  _MACG_STUDENT,  # MacGregor Thu
+    1:  _MBBC_STUDENT,  # MBBC Tue        — Lakehouse
+    5:  _ISHS_MON,      # ISHS Mon        — Kenko
+    6:  _ISHS_TUE,      # ISHS Tue        — Kenko
+    7:  _ISHS_THU,      # ISHS Thu        — Kenko
+    8:  _LORETO_MON,    # Loreto Mon      — GyG
+    9:  _LORETO_TUE,    # Loreto Tue      — GyG
+    10: _CHAC_MON,      # Cannon Hill Mon — GyG
+    11: _CHAC_WED,      # Cannon Hill Wed — GyG
 }
 STUDENT_LINES_PER_SESSION = 6  # n students rated per session
 
@@ -162,8 +243,11 @@ def _slot_enrolment_ids(cur, slot_id: int, limit: int) -> list[int]:
     return [r[0] for r in cur.fetchall()]
 
 
-def _terrific_menu_ids(cur) -> list[int]:
-    cur.execute("SELECT id FROM menu_items WHERE caterer_id = 2 ORDER BY id")
+def _caterer_menu_ids(cur, caterer_id: int) -> list[int]:
+    cur.execute(
+        "SELECT id FROM menu_items WHERE caterer_id = %s ORDER BY id",
+        (caterer_id,),
+    )
     return [r[0] for r in cur.fetchall()]
 
 
@@ -173,18 +257,47 @@ def run() -> None:
     order_line_count = 0
     tutor_feedback_count = 0
 
+    menu_by_caterer: dict[int, list[int]] = {}
+
     with get_conn() as conn:
         with conn.cursor() as cur:
-            terrific_menu = _terrific_menu_ids(cur)
 
             for week_idx, week_start in enumerate(WEEK_STARTS):
                 for slot_id, info in SLOT_INFO.items():
                     caterer_id  = info["caterer_id"]
                     day_of_week = info["day_of_week"]
-                    students    = info["students"]
+                    students    = ATTENDANCE.get(
+                        slot_id, [info["students"]] * len(WEEK_STARTS)
+                    )[week_idx]
                     tutor_id    = info["tutor_id"]
 
                     session_date  = _session_date(week_start, day_of_week)
+
+                    # Cancelled session: ensure no order/feedback/order_lines exist
+                    # for it (delete any from a prior seed), then skip entirely.
+                    if (slot_id, session_date) in CANCELLED_SESSIONS:
+                        cur.execute(
+                            "SELECT id FROM orders WHERE session_slot_id = %s "
+                            "AND session_date = %s",
+                            (slot_id, session_date),
+                        )
+                        row = cur.fetchone()
+                        if row:
+                            oid = row[0]
+                            cur.execute(
+                                "DELETE FROM feedback WHERE order_line_id IN "
+                                "(SELECT id FROM order_lines WHERE order_id = %s)",
+                                (oid,),
+                            )
+                            cur.execute(
+                                "DELETE FROM order_lines WHERE order_id = %s", (oid,)
+                            )
+                            cur.execute(
+                                "DELETE FROM feedback WHERE order_id = %s", (oid,)
+                            )
+                            cur.execute("DELETE FROM orders WHERE id = %s", (oid,))
+                        continue
+
                     composed_at   = datetime.datetime(
                         session_date.year, session_date.month, session_date.day,
                         9, 0, 0, tzinfo=datetime.timezone.utc
@@ -193,6 +306,8 @@ def run() -> None:
                     total_cost = students * CATERER_PRICE[caterer_id] + CATERER_DELIVERY[caterer_id]
 
                     # Order: reuse if it already exists (idempotent re-run), else insert.
+                    # On reuse, converge total_items/total_cost_cents to the per-week
+                    # ATTENDANCE figure so re-seeding applies the absence variation.
                     cur.execute(
                         "SELECT id FROM orders WHERE session_slot_id = %s AND session_date = %s",
                         (slot_id, session_date),
@@ -200,6 +315,11 @@ def run() -> None:
                     existing = cur.fetchone()
                     if existing:
                         order_id = existing[0]
+                        cur.execute(
+                            "UPDATE orders SET total_items = %s, total_cost_cents = %s "
+                            "WHERE id = %s",
+                            (students, total_cost, order_id),
+                        )
                     else:
                         cur.execute(
                             """
@@ -278,10 +398,14 @@ def run() -> None:
                             enrolment_ids = _slot_enrolment_ids(
                                 cur, slot_id, STUDENT_LINES_PER_SESSION
                             )
+                            menu = menu_by_caterer.get(caterer_id)
+                            if menu is None:
+                                menu = _caterer_menu_ids(cur, caterer_id)
+                                menu_by_caterer[caterer_id] = menu
                             for i, (enr_id, score) in enumerate(
                                 zip(enrolment_ids, student_scores)
                             ):
-                                menu_item_id = terrific_menu[i % len(terrific_menu)]
+                                menu_item_id = menu[i % len(menu)]
                                 cur.execute(
                                     """
                                     INSERT INTO order_lines (

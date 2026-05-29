@@ -25,6 +25,7 @@ Dummy data for demo (run after core data is seeded):
   12. seed_feedback_history           — DUMMY: 5 weeks of historical orders + feedback
   13. seed_upcoming_exclusions        — DUMMY: school camp (ISHS Yr10) + Term 2 holidays
   14. seed_upcoming_absences          — DUMMY: ~11 upcoming student absences
+  15. seed_meal_requests              — DUMMY: ~40% of students file a dietary-safe meal request
 """
 import sys
 
@@ -48,22 +49,24 @@ def main() -> None:
     from src.ingest import seed_feedback_history
     from src.ingest import seed_upcoming_exclusions
     from src.ingest import seed_upcoming_absences
+    from src.ingest import seed_meal_requests
 
     steps = [
-        ("1/14  dietary_tags",                 seed_dietary_tags.run),
-        ("2/14  schools",                      seed_schools.run),
-        ("3/14  caterers",                     seed_caterers.run),
-        ("4/14  tutors",                       seed_tutors.run),
-        ("5/14  menu_items",                   seed_menu_items.run),
-        ("6/14  sessions",                     seed_sessions.run),
-        ("7/14  enrolments",                   seed_enrolments.run),
-        ("8/14  absences",                     seed_absences.run),
-        ("9/14  exclusions",                   seed_exclusions.run),
-        ("10/14 enrolment_session_slots",      seed_enrolment_session_slots.run),
-        ("11/14 term_meal_preferences [DEMO]", seed_term_meal_preferences.run),
-        ("12/14 feedback_history [DEMO]",      seed_feedback_history.run),
-        ("13/14 upcoming_exclusions [DEMO]",   seed_upcoming_exclusions.run),
-        ("14/14 upcoming_absences [DEMO]",     seed_upcoming_absences.run),
+        ("1/15  dietary_tags",                 seed_dietary_tags.run),
+        ("2/15  schools",                      seed_schools.run),
+        ("3/15  caterers",                     seed_caterers.run),
+        ("4/15  tutors",                       seed_tutors.run),
+        ("5/15  menu_items",                   seed_menu_items.run),
+        ("6/15  sessions",                     seed_sessions.run),
+        ("7/15  enrolments",                   seed_enrolments.run),
+        ("8/15  absences",                     seed_absences.run),
+        ("9/15  exclusions",                   seed_exclusions.run),
+        ("10/15 enrolment_session_slots",      seed_enrolment_session_slots.run),
+        ("11/15 term_meal_preferences [DEMO]", seed_term_meal_preferences.run),
+        ("12/15 feedback_history [DEMO]",      seed_feedback_history.run),
+        ("13/15 upcoming_exclusions [DEMO]",   seed_upcoming_exclusions.run),
+        ("14/15 upcoming_absences [DEMO]",     seed_upcoming_absences.run),
+        ("15/15 meal_requests [DEMO]",         seed_meal_requests.run),
     ]
 
     for label, fn in steps:
