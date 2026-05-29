@@ -41,6 +41,9 @@ emails/outgoing/drafts/
 *.sqlite
 *.sqlite3
 
+# ── DB backups (pg_dump contains real student PII — never commit) ─────────────
+backups/
+
 # ── Claude Code project settings ─────────────────────────────────────────────
 # .claude/settings.json is committed (has Stop hook for chat history).
 # Only ignore the local overrides file.
@@ -48,6 +51,8 @@ emails/outgoing/drafts/
 
 # ── Gmail OAuth secrets (never commit) ────────────────────────────────────────
 .secrets/
+config/gmail_credentials.json
+config/gmail_token.json
 
 # ── Chat history (session log appended by hook; .md summaries are committed) ──
 chat_history/sessions.log

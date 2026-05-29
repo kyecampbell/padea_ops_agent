@@ -189,6 +189,49 @@ This replaces the V3 approach of checking a mixed boolean state across eight col
 
 ---
 
+## OPT-07 — `enrolment_session_slots` junction table
+
+**What V3 had:** The `enrolments` table links to `school_id` only. There is no column or junction table connecting a kid to the specific `session_slots` they attend at that school. Multi-session schools (ISHS has three sessions: Monday, Tuesday, Thursday; LC and CHAC each have two) have completely separate student cohorts per day — but the schema had no way to express this. The closest query it could support was "all active enrolments at ISHS", which returned all 120 students regardless of which day was being ordered for.
+
+**What V4 changes:** Adds a junction table:
+
+```sql
+CREATE TABLE enrolment_session_slots (
+    enrolment_id    bigint NOT NULL REFERENCES enrolments(id) ON DELETE CASCADE,
+    session_slot_id bigint NOT NULL REFERENCES session_slots(id) ON DELETE RESTRICT,
+    joined_date     date NOT NULL DEFAULT CURRENT_DATE,
+    left_date       date,
+    PRIMARY KEY (enrolment_id, session_slot_id),
+    CHECK (left_date IS NULL OR left_date >= joined_date)
+);
+```
+
+With two supporting indexes:
+
+```sql
+CREATE INDEX idx_enrolment_session_slots_active_session
+    ON enrolment_session_slots (session_slot_id) WHERE left_date IS NULL;
+
+CREATE INDEX idx_enrolment_session_slots_enrolment
+    ON enrolment_session_slots (enrolment_id);
+```
+
+The cohort query at order composition becomes:
+
+```sql
+SELECT e.id, e.student_name
+FROM enrolments e
+JOIN enrolment_session_slots ess ON ess.enrolment_id = e.id
+WHERE ess.session_slot_id = <target_slot_id>
+  AND ess.left_date IS NULL;
+```
+
+`left_date` tracks when a kid leaves a specific cohort (e.g. drops Monday but stays Thursday). This is independent of the V3-EL-01 enrolment-level lifecycle dates, which cover leaving Padea entirely.
+
+**Why it matters:** Without this junction, the `get_enrolments_for_session` tool would query all school-level enrolments and over-count. For ISHS Monday (36 students), the uncorrected query would return all 120 ISHS enrolments — tripling the order count, producing incorrect dietary lists, and attaching order lines to kids who are not present. The fix is structural: the cohort filter must join through this table.
+
+---
+
 ## Summary table
 
 | ID | What changed | Tables affected |
@@ -199,3 +242,4 @@ This replaces the V3 approach of checking a mixed boolean state across eight col
 | OPT-04 | Denormalised `caterer_id` + new index | `feedback` |
 | OPT-05 | Snapshotted `gst_rate_percent` | `orders` |
 | OPT-06 | 8 dietary boolean columns → `menu_item_dietary_tags` junction; neutral tag descriptions | `menu_items`, `dietary_tags` (seed), new `menu_item_dietary_tags` |
+| OPT-07 | `enrolment_session_slots` junction + 2 indexes; cohort filter for multi-session schools | new `enrolment_session_slots` |

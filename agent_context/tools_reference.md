@@ -314,11 +314,11 @@ def project_weekly_cost(caterer_id: int, school_id: int) -> dict
 
 ### `generate_weekly_summary`
 ```python
-def generate_weekly_summary(caterer_id: int, week_ending_date: date) -> dict
+def generate_weekly_summary(caterer_id: int, week_of: date, as_of: datetime | None = None) -> dict
 ```
-**Returns**: `{total_items: int, total_cost_cents: int, moq_floor_applied: bool, moq_variance_cents: int, gst_amount_cents: int, grand_total_cents: int, session_breakdown: list[dict]}`.  
-**Notes**: Aggregates all orders for this caterer in the 7 days ending on `week_ending_date`. Applies GST according to `caterers.price_includes_gst` and `gst_rate_percent`.  
-**Build status**: stub
+**Returns**: `{total_items: int, total_cost_cents: int, total_delivery_cents: int, moq_floor_applied: bool, moq_variance_cents: int, gst_amount_cents: int, grand_total_cents: int, session_breakdown: list[dict], ...}`.  
+**Notes**: Aggregates all orders for this caterer in the ISO week (Mon–Sun) containing `week_of`. GST normalised to an inclusive total over meals + delivery×sessions, one round at the boundary. `as_of` pins the quality rolling means.  
+**Build status**: built
 
 ### `compose_weekly_summary_email`
 ```python

@@ -215,3 +215,14 @@ After completing all three tasks:
 3. Run `wc -l` on both files and report the counts.
 4. Report any "find this text" patterns that didn't match in the source — flag them, do not silently make changes.
 5. Confirm the old filename `v3_reinstatements_ledger_clean.md` no longer exists (it was renamed).
+
+
+Here's a memo paragraph for the geocoding shortcut (conscious cut, same treatment as the order_lines cut):
+
+In production, distance calculation between a school and a caterer would rely on real geocoding — a library like pgeocode, a postcodes API, or stored coordinates on the schema. For the demo, all six schools and all four caterers share eight distinct Queensland postcodes, which are stable and fully known in advance. Rather than add a geocoding dependency (pgeocode requires a local data file; postcodes APIs add a network call at query time), I hardcoded a dict of eight postcode centroids derived from ABS locality data. The dict covers every postcode in the seed, verified by cross-referencing distinct values from schools and caterers at build time — no real query can throw. geopy's `geodesic()` function (Karney's algorithm, more accurate than the older Vincenty method) runs entirely offline against those centroids. The function raises `ValueError` on any unrecognised postcode rather than silently wrapping, so the required extension is immediately obvious if new schools or caterers are added. The correct production fix is a one-column schema change — add `lat, lon` to schools and caterers — eliminating the postcode lookup layer entirely.
+
+---
+
+Here's a memo paragraph you can drop in:
+
+Feedback in the system can attach at two levels: the session level, where the on-site manager rates the whole delivery, and the meal level, where individual meals (order lines) can carry per-meal tutor feedback. I built the schema to support both, but seeded only manager-level feedback and left order lines empty. This was a deliberate scope decision, not an oversight. The core problem the system exists to solve — detecting when a caterer's quality declines and acting on it through a warning and then a competitive re-bid — runs entirely on session-level manager ratings, which I seeded with an engineered decline so the escalation arc is fully demonstrable. The meal-level path supports a secondary "tutor-pattern" escalation that fires when tutors repeatedly rate a specific caterer's individual meals poorly; with no order lines seeded, that path has no data to fire on and isn't shown in the demo. I chose to deprioritise it because it adds seed and modelling effort without strengthening the primary arc, and because the system already surfaces the absence of tutor feedback as data the agent can reason about rather than silently ignoring it. If meal-level signal proved valuable in practice, extending the seed and wiring the tutor-pattern escalation is a contained, additive change — the schema already accommodates it.

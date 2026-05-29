@@ -11,11 +11,6 @@
 # V3-AI-01: locked at 72 hours. Do not reduce without caterer consultation.
 order_hours_before_session: 72
 
-# When assessing whether a year-level exclusion applies (school camp, exam block),
-# add this fraction of the excluded cohort as contingency meals, rounded up.
-# V3-OE-01 / schema relationship 12: hard-coded 10% for V3.
-exclusion_buffer_rate: 0.10
-
 # =============================================================================
 # MOQ (MINIMUM ORDER QUANTITY)
 # =============================================================================
@@ -80,8 +75,10 @@ gmail_credentials_path: ".secrets/gmail_credentials.json"
 # =============================================================================
 
 # Maximum number of tool calls the agent makes in a single run.
-# V3 design: ~15. Raise with caution — each call is logged and billed.
-max_tool_calls_per_run: 15
+# V4 per-session design: one session per run, quality scoped to 24h feedback window.
+# Worst-case single-session run (gmail + escalations + quality) ≈ 13 calls.
+# Cap at 20 gives 7 calls headroom. Each call is logged and billed.
+max_tool_calls_per_run: 20
 
 # Claude model for the agent. Update when migrating model versions.
 agent_model: "claude-sonnet-4-6"
@@ -102,8 +99,5 @@ default_caterer_max_delivery_km: 50
 # DEMO / SEED DATA
 # =============================================================================
 
-# Number of contingency (buffer) meals added to every order beyond the confirmed cohort.
-# V3-MP-01: zero operational margin means NO tutor buffer, NO contingency lines.
-# The only buffer is the exclusion 10% (above) for year-level exclusions.
-# This value should be 0 for V3. Left here so V4 can introduce it cleanly.
+# V4: zero operational margin — no buffer meals of any kind.
 standard_contingency_meals: 0
