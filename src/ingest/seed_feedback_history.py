@@ -13,10 +13,16 @@ CATERER TREND (engineered to trigger sustained-decline escalation for Terrific):
   Caterer 3 — Kenko       : steady 4 across all weeks
   Caterer 4 — GyG         : variable 3–4 across all weeks
 
-Ratings are designed so that:
-  compute_rolling_mean(Terrific, weeks=4) ≈ 2.2  (<  quality_floor 3.0)
-  compute_rolling_mean(Terrific, weeks=12) ≈ 3.3 (>> 4w mean, decline > 0.5)
-→ sustained-decline escalation fires in the demo run.
+PER-SCHOOL DIVERGENCE (Terrific serves two schools — see SLOT_RATING_OVERRIDE):
+  JPC (slots 2,3)      : 5,5,3,2,1  — collapse (drives the caterer-level alert)
+  MacGregor (slot 4)   : 5,4,4,4,3  — healthy, only grazes the floor
+  → per-school monitoring shows JPC in crisis while MacGregor stays fine.
+
+Ratings are designed so the caterer-level (both schools combined) rolling mean
+still trips the trigger as_of the demo week (2026-06-01 15:30 AEST):
+  compute_rolling_mean(Terrific, weeks=4)  ≈ 2.56  (<  quality_floor 3.0)
+  compute_rolling_mean(Terrific, weeks=12) ≈ 3.47  (12w − 4w ≈ 0.91 ≥ 0.5)
+→ sustained-decline escalation still fires in the demo run.
 
 NOTE: The feedback CHECK constraint requires:
   source='manager' → order_id IS NOT NULL, order_line_id IS NULL
@@ -75,7 +81,20 @@ RATINGS: dict[int, list[int]] = {
     4: [4, 3, 4, 3, 3],
 }
 
-# Manager comments for notable sessions, keyed by (caterer_id, week_index)
+# Per-slot rating override (takes precedence over the per-caterer RATINGS above).
+# Terrific serves two schools — JPC (slots 2,3) and MacGregor (slot 4). To make
+# per-school quality monitoring visibly matter, the two schools tell different
+# stories on the SAME caterer: JPC collapses (5,5,3,2,1) while MacGregor stays
+# healthy and only grazes the floor (5,4,4,4,3). The caterer-level rolling mean
+# still trips the sustained-decline trigger (4w≈2.56<3.0, 12w−4w≈0.91≥0.5).
+SLOT_RATING_OVERRIDE: dict[int, list[int]] = {
+    4: [5, 4, 4, 4, 3],   # MacGregor (school 3) — healthy, ends just at the floor
+}
+
+# Manager comments for notable sessions, keyed by (caterer_id, week_index).
+# These describe the Terrific decline and apply only to the collapsing JPC slots;
+# slots in SLOT_RATING_OVERRIDE (the healthy MacGregor session) get no comment so
+# the text never contradicts a healthy rating.
 COMMENTS: dict[tuple[int, int], dict[str, str]] = {
     (2, 2): {"manager": "Food was lukewarm on arrival, a few items missing."},
     (2, 3): {"manager": "Multiple items wrong — two halal students received non-halal meals. Delivery 20 min late."},
@@ -151,8 +170,13 @@ def run() -> None:
                     order_count += 1
 
                     # Manager feedback (source='manager' requires order_id, no order_line_id)
-                    rating = RATINGS[caterer_id][week_idx]
-                    comment = COMMENTS.get((caterer_id, week_idx), {}).get("manager")
+                    # Per-slot override (e.g. MacGregor) wins over the per-caterer trend.
+                    if slot_id in SLOT_RATING_OVERRIDE:
+                        rating = SLOT_RATING_OVERRIDE[slot_id][week_idx]
+                        comment = None  # healthy session — no decline-narrative comment
+                    else:
+                        rating = RATINGS[caterer_id][week_idx]
+                        comment = COMMENTS.get((caterer_id, week_idx), {}).get("manager")
                     cur.execute(
                         """
                         INSERT INTO feedback (
