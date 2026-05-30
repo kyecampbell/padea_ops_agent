@@ -72,3 +72,6 @@ Thumbs.db
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Excluded workflow diagram (kept locally, not published)
+docs/v4_optimised/workflowdiagramupdated.png
