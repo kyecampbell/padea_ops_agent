@@ -1,6 +1,6 @@
 # Data Inventory — Phase 2 Ingest Planning
 
-_Last updated: 2026-05-28 (Session 008)_  
+_Last updated: 2026-05-28 (Session 010)_  
 _Schema target: V4 (`docs/v4_optimised/Schema/v4_schema.sql`)_  
 _Cross-referenced against: `docs/v1_initials/data_observations.md` (compiled 2026-05-25)_
 
@@ -433,7 +433,7 @@ Consistent with CLAUDE.md rule 3 — err on the side of dietary safety.
 
 ## Next steps before Phase 2 ingest can run
 
-1. **Run the two ALTER TABLE statements from session 003** — add `other_allergy_notes text` to `enrolments` and three checklist booleans to `feedback` (these are free changes; tables are empty)
+1. **Run the two ALTER TABLE statements from session 005** — add `other_allergy_notes text` to `enrolments` and three checklist booleans to `feedback` (these are free changes; tables are empty)
 2. **Decide on Spaghetti meatballs** — see open item above
 3. **Write `src/ingest/` scripts** in this order:
    1. `seed_dietary_tags.py` — 11-row reference table

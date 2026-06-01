@@ -14,8 +14,4 @@ At the end of each Claude Code session, Claude writes a session summary to this 
 
 Claude Code sessions don't persist conversation history between runs. This folder bridges the gap — it gives the next session enough context to resume without re-deriving everything from scratch.
 
-## Current session index
-
-| Date | File | Summary |
-|---|---|---|
-| 2026-05-27 | [2026-05-27_001.md](2026-05-27_001.md) | Project orientation + agent_context/ scaffold |
+The live session index is the Build status block in the project root `CLAUDE.md` — read the most recent `YYYY-MM-DD_NNN.md` here for the latest handoff. `sessions.log` is a one-line-per-session heartbeat.

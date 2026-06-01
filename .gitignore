@@ -57,8 +57,12 @@ backups/
 config/gmail_credentials.json
 config/gmail_token.json
 
-# ── Chat history (session log appended by hook; .md summaries are committed) ──
+# ── Chat history (session log + raw transcripts from hook; .md summaries are committed) ──
 chat_history/sessions.log
+chat_history/transcripts/
+
+# ── Large video deliverables (submitted separately, not committed) ───────────
+*.mov
 
 # ── OS / editor noise ─────────────────────────────────────────────────────────
 .DS_Store

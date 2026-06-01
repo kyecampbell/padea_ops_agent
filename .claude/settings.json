@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "echo \"$(date '+%Y-%m-%d %H:%M:%S') — session ended\" >> /Users/kyecampbell/Projects/padea_ops_agent/chat_history/sessions.log"
+            "command": "python3 /Users/kyecampbell/Projects/padea_ops_agent/.claude/hooks/save_transcript.py"
           }
         ]
       }

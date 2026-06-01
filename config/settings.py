@@ -92,9 +92,9 @@ class Settings(BaseSettings):
     email_mode: Literal["demo", "production"] = _yaml.get("email_mode", "demo")
     demo_email_address: str = _yaml.get("demo_email_address", "")
 
-    gmail_token_path: str = _yaml.get("gmail_token_path", ".secrets/gmail_token.json")
+    gmail_token_path: str = _yaml.get("gmail_token_path", "config/gmail_token.json")
     gmail_credentials_path: str = _yaml.get(
-        "gmail_credentials_path", ".secrets/gmail_credentials.json"
+        "gmail_credentials_path", "config/gmail_credentials.json"
     )
 
     # The Gmail account the agent sends as and polls. Lives in .env (secret-ish:

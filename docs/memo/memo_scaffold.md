@@ -76,7 +76,7 @@ deliberate trade-off, not an oversight. See Key Lessons.
 
 ---
 
-## Phase 2 — Project scaffolding and tooling setup (2026-05-27, Session 001)
+## Phase 2 — Project scaffolding and tooling setup (2026-05-27, Session 003)
 
 **Date:** 27 May 2026
 
@@ -99,7 +99,7 @@ deliberate trade-off, not an oversight. See Key Lessons.
 
 ---
 
-## Phase 3 — Schema review and V4 optimisations pass (2026-05-28, Sessions 002–004)
+## Phase 3 — Schema review and V4 optimisations pass (2026-05-28, Sessions 004–006)
 
 **Date:** 28 May 2026
 
@@ -133,7 +133,7 @@ time, but it was better caught here.
 
 ---
 
-## Phase 4 — Source data ingest and DB population (2026-05-28, Sessions 005–007)
+## Phase 4 — Source data ingest and DB population (2026-05-28, Sessions 007–009)
 
 **Date:** 28 May 2026
 
@@ -169,7 +169,7 @@ Flagged for Dylan, documented in data_observations.md.
 
 ---
 
-## Phase 5 — Tool layer (2026-05-28, Sessions 008–012)
+## Phase 5 — Tool layer (2026-05-28, Sessions 010–014)
 
 **Date:** 28 May 2026
 
@@ -210,7 +210,7 @@ the dict is the correct demo shortcut. Consciously documented.
 
 ---
 
-## Phase 6 — Agent loop (2026-05-28, Sessions 013–016)
+## Phase 6 — Agent loop (2026-05-28, Sessions 015–018)
 
 **Date:** 28 May 2026
 
@@ -239,7 +239,7 @@ at integration, not unit, test level.
 
 ---
 
-## Phase 7 — First live run and prompt correction (2026-05-29, Sessions 017–018)
+## Phase 7 — First live run and prompt correction (2026-05-29, Sessions 019–020)
 
 **Date:** 29 May 2026
 
@@ -269,7 +269,7 @@ at integration, not unit, test level.
 
 ---
 
-## Phase 8 — Discovered gap and Option C design (2026-05-29, Session 019)
+## Phase 8 — Discovered gap and Option C design (2026-05-29, Session 021)
 
 **Date:** 29 May 2026
 
@@ -1078,12 +1078,12 @@ it shows acknowledged scope management, not ignorance.
 | Dietary tag history | edge_cases.md, memo_material.md | Real dietary-incident dispute |
 | Tutor-pattern escalation (no order_lines seed) | CLAUDE.md, memo_material.md | Extend seed + wire tutor-pattern escalation |
 | Multiple return cycles | edge_cases.md, v4_summary.md | Add enrolment_periods table when case becomes routine |
-| V4 simplification pass | CLAUDE.md, Session 001 | Time allowed it |
-| V5 acceleration pass | CLAUDE.md, Session 001 | Time allowed it |
+| V4 simplification pass | CLAUDE.md, Session 003 | Time allowed it |
+| V5 acceleration pass | CLAUDE.md, Session 003 | Time allowed it |
 | Gmail credentials | CLAUDE.md build status | Obtain OAuth credentials, implement src/tools/gmail.py |
 | Payment mechanism | edge_cases.md, v3_decisions_ledger.md | Payment integration if operator labour becomes bottleneck |
 | Monday consolidated summary workflow | CLAUDE.md | Next build phase after Option C |
-| Option C (VO fallback) | Session 019, CLAUDE.md | Build in next session |
+| Option C (VO fallback) | Session 021, CLAUDE.md | Build in next session |
 | PII / data retention | edge_cases.md | Real deployment |
 | Multiple operators | edge_cases.md | Team grows |
 | Per-rater normalisation | v3_decisions_ledger.md V3-FB-01 notes | 30+ ratings per rater stable |
